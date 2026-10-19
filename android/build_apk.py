@@ -105,7 +105,7 @@ def main():
             "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-dname", "CN=Fry3DX", stdout=subprocess.DEVNULL)
     os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)
     out = os.path.join(ROOT, "dist", f"{APP}-{app_version()}-android-arm64.apk")
-    run(os.path.join(tools, "apksigner"), "sign", "--ks", keystore, "--ks-pass", f"pass:{password}", "--out", out, aligned)
+    run(os.path.join(tools, "apksigner"), "sign", "--v4-signing-enabled", "false", "--ks", keystore, "--ks-pass", f"pass:{password}", "--out", out, aligned)
     print(f"{os.path.relpath(out, ROOT)}: {os.path.getsize(out) // (1024 * 1024)} MB")
     if "--install" in sys.argv:
         run("adb", "install", "-r", out)
