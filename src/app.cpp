@@ -476,6 +476,9 @@ public:
         static keel::Cmd recover("fry_recover", [](const keel::Args&) { self->findAutosaves(), self->showRecover_ = !self->recover_.empty(); }, "Fry3DX: show the autosaves to recover");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         keel::execute("r_autoexposure 0; r_ssr 0; r_volumetric 0; r_shafts 0; r_dynres 0; r_renderscale 1; fps_max 144");
+#if defined(__ANDROID__) // a phone: none of the heavy parts (and its GPU's driver is kept to well-trodden ground)
+        keel::execute("r_gpuculling 0; r_occlusion 0; r_volumetricfog 0; r_mirrors 0; r_taa 0; r_shadowres 2048; r_lightshadows 0; fps_max 60");
+#endif
         newScene();
         if (!startPath_.empty()) openFile(startPath_);
         findAutosaves();
@@ -1102,13 +1105,20 @@ private:
         stdfs::remove(autosavePath_, ec), stdfs::remove(autosavePath_ + ".from", ec);
         autosavePath_.clear(), lastAutosave_ = now();
     }
-    // Autosaves left behind (it didn't close properly): offered back.
+    // Autosaves left behind (it didn't close properly): offered back. Only the newest 15 are
+    // kept; older ones are deleted.
     void findAutosaves() {
+        static constexpr size_t kKeep = 15;
         recover_.clear();
         std::error_code ec;
+        std::vector<std::pair<stdfs::file_time_type, std::string>> found;
         for (const auto& e : stdfs::directory_iterator(autosaveDir(), ec))
-            if (e.path().extension() == ".fry") recover_.push_back(e.path().string());
-        std::sort(recover_.begin(), recover_.end());
+            if (e.path().extension() == ".fry") found.emplace_back(e.last_write_time(ec), e.path().string());
+        std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; }); // newest first
+        for (size_t i = 0; i < found.size(); ++i) {
+            if (i < kKeep || found[i].second == autosavePath_) recover_.push_back(found[i].second);
+            else stdfs::remove(found[i].second, ec), stdfs::remove(found[i].second + ".from", ec);
+        }
         showRecover_ = !recover_.empty() && !keel::isTestMode();
     }
     void recoverWindow() {
@@ -4395,14 +4405,19 @@ private:
 
     // ───────────────────────────── 3D ─────────────────────────────
 
+#if defined(__ANDROID__)
+    static constexpr int kRayLight = 0; // (light bounced by ray tracing: not on phones)
+#else
+    static constexpr int kRayLight = 1;
+#endif
     // Solid: a plain grey room and soft studio light, no shadows or effects — for seeing shapes.
     // Rendered: sky, sun, shadows and effects.
     void applyShading() {
         const Look& k = scene_.look;
         const std::string want =
             shading() == Shading::Rendered
-                ? std::format("r_ssao {}; r_bloom {}; r_vignette {}; r_exposure {}; r_saturation {}; r_sharpen {}; r_shadowsoft {}; r_gi 1; r_fog 0; r_skycolor \"{} {} {}\"", k.ao,
-                              k.bloom, k.vignette, k.exposure, k.saturation, k.sharpen, k.shadowSoft, k.background.r, k.background.g, k.background.b)
+                ? std::format("r_ssao {}; r_bloom {}; r_vignette {}; r_exposure {}; r_saturation {}; r_sharpen {}; r_shadowsoft {}; r_gi {}; r_fog 0; r_skycolor \"{} {} {}\"", k.ao,
+                              k.bloom, k.vignette, k.exposure, k.saturation, k.sharpen, k.shadowSoft, kRayLight, k.background.r, k.background.g, k.background.b)
                 : std::string("r_ssao 0; r_bloom 0; r_vignette 0; r_exposure 1; r_saturation 1; r_sharpen 0; r_gi 0; r_fog 0; r_skycolor \"0.2 0.2 0.215\"");
         if (want == appliedLook_) return;
         appliedLook_ = want;
