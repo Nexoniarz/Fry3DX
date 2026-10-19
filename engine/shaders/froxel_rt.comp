@@ -1,0 +1,5 @@
+#version 460
+// The fog grid with ray queries: each cell sees whether it has sky above it (froxel_main.glsl).
+#extension GL_EXT_ray_query : require
+#define KEEL_FOG_RAYS
+#include "froxel_main.glsl"

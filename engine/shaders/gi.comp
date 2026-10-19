@@ -1,0 +1,143 @@
+#version 460
+// Real-time GI (gi.glsl): one workgroup per probe, one hardware ray per thread (ray queries
+// against this frame's scene). Where a ray lands: that surface's colour, lit by the dynamic
+// lights that reach it (a shadow ray each) and by last frame's probes there (so light bounces
+// more than once); behind a surface (the probe's stuck in a wall) it counts against the probe.
+// Then the probe's harmonics and distances, blended with what it had.
+#extension GL_EXT_ray_query : require
+#include "backend.glsl"
+#define KEEL_FRAME_ONLY
+#include "model.glsl"
+layout(local_size_x = 32) in;
+layout(buffer_reference, std430) readonly buffer GiVertices { Vertex v[]; };
+layout(buffer_reference, std430) readonly buffer GiIndices { uint i[]; };
+struct RayInst { GiVertices vertices; GiIndices indices; uint firstIndex, textures, tint, pad; };
+layout(buffer_reference, std430) readonly buffer RayInsts { RayInst r[]; };
+layout(buffer_reference, std430) writeonly buffer GiProbesOut { GiProbe p[]; };
+PUSH_BLOCK {
+    FrameData frame;
+    GiProbesOut cur;
+    GiProbes prev;
+    RayInsts insts;
+    uvec2 tlas;       // the scene's acceleration structure
+    uint fresh;       // 1: start over (nothing to blend with)
+    float hysteresis; // how much of the old light stays each frame
+    vec4 rotation;    // this frame's turn of the ray pattern (quaternion)
+} pc;
+#define FRAME pc.frame
+#define GI_PROBES pc.prev
+#include "gi.glsl"
+
+const uint kRays = 32u;
+shared vec3 s_light[kRays], s_dir[kRays];
+shared float s_dist[kRays];
+shared uint s_back[kRays];
+
+vec3 rotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+vec3 fibonacci(uint i, uint n) {
+    float z = 1.0 - (2.0 * float(i) + 1.0) / float(n), r = sqrt(max(1.0 - z * z, 0.0));
+    float phi = float(i) * 2.39996323;
+    return vec3(cos(phi) * r, sin(phi) * r, z);
+}
+bool blocked(vec3 from, vec3 dir, float len) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, accelerationStructureEXT(pc.tlas), gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFF, from, 0.01, dir, len);
+    while (rayQueryProceedEXT(q)) {}
+    return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+void main() {
+    uint probe = gl_WorkGroupID.x, t = gl_LocalInvocationID.x;
+    ivec3 slot = ivec3(probe % uint(kGiDims.x), (probe / uint(kGiDims.x)) % uint(kGiDims.y), probe / uint(kGiDims.x * kGiDims.y));
+    ivec3 origin = ivec3(FRAME.giOrigin.xyz);
+    ivec3 cell = origin + giWrap(slot - origin); // the world cell this slot holds now
+    vec3 pos = (vec3(cell) + 0.5) * FRAME.gi.y; // between floors and walls (on the grid lines maps are built on)
+    GiProbe old = pc.prev.p[probe];
+    bool fresh = pc.fresh != 0u || old.tag.w < 0.5 || ivec3(old.tag.xyz) != cell;
+
+    vec3 dir = normalize(rotate(pc.rotation, fibonacci(t, kRays)));
+    const float kFar = FRAME.gi.y * 8.0;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, accelerationStructureEXT(pc.tlas), gl_RayFlagsOpaqueEXT, 0xFF, pos, 0.0, dir, kFar);
+    while (rayQueryProceedEXT(q)) {}
+    vec3 light = vec3(0.0);
+    float dist = kFar;
+    uint back = 0u;
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        dist = rayQueryGetIntersectionTEXT(q, true);
+        RayInst ri = pc.insts.r[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
+        uint first = ri.firstIndex + uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)) * 3u;
+        Vertex a = ri.vertices.v[ri.indices.i[first]], b = ri.vertices.v[ri.indices.i[first + 1u]], c = ri.vertices.v[ri.indices.i[first + 2u]];
+        vec2 bc = rayQueryGetIntersectionBarycentricsEXT(q, true);
+        vec3 w3 = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
+        mat4x3 toWorld = rayQueryGetIntersectionObjectToWorldEXT(q, true);
+        vec3 n = normalize(mat3(toWorld) * (vec3(a.nx, a.ny, a.nz) * w3.x + vec3(b.nx, b.ny, b.nz) * w3.y + vec3(c.nx, c.ny, c.nz) * w3.z));
+        if (dot(n, dir) > 0.0) { // its back: inside something (a wall's far side, a closed box)
+            back = 1u;
+            dist *= 0.2;
+        } else {
+            vec2 uv = vec2(a.u, a.v) * w3.x + vec2(b.u, b.v) * w3.y + vec2(c.u, c.v) * w3.z;
+            vec3 albedo = sampleTexLod(ri.textures & 0xFFFFu, uv, 4.0).rgb * unpackUnorm4x8(ri.tint).rgb;
+            vec3 hit = pos + dir * dist + n * 0.5;
+            vec3 direct = vec3(0.0);
+            uint count = min(uint(FRAME.camPos.w), 32u);
+            for (uint k = 0u; k < count; ++k) {
+                Light l = LIGHT(k);
+                vec3 toLight = l.posRadius.xyz - hit;
+                float d = length(toLight);
+                if (d >= l.posRadius.w) continue;
+                vec3 L = toLight / max(d, 0.001);
+                float ndl = dot(n, L);
+                if (ndl <= 0.0) continue;
+                float fall = 1.0 - d / l.posRadius.w, atten = fall * fall;
+                if (l.spot.w > -1.5) atten *= spotShape(l, dot(-L, l.spot.xyz));
+                // (Stopping short of the light: lamps sit inside their fittings.)
+                if (atten <= 1e-3 || blocked(hit, L, max(d - 12.0, 0.0))) continue;
+                direct += l.color.rgb * atten * ndl;
+            }
+            // More bounces: what last frame's probes say reaches that spot.
+            direct += giIrradiance(hit, n, -dir);
+            light = albedo * direct;
+        }
+    }
+    s_light[t] = light;
+    s_dir[t] = dir;
+    s_dist[t] = dist;
+    s_back[t] = back;
+    barrier();
+    if (t != 0u) return;
+
+    GiProbe p;
+    for (int i = 0; i < 4; ++i) p.sh[i] = vec4(0.0);
+    vec4 mean0 = vec4(0.0), mean1 = vec4(0.0), w0 = vec4(0.0), w1 = vec4(0.0); // +x -x +y -y, +z -z (and their squares)
+    vec4 sq0 = vec4(0.0), sq1 = vec4(0.0);
+    uint backs = 0u;
+    const float weight = 12.566371 / float(kRays);
+    for (uint i = 0u; i < kRays; ++i) {
+        vec3 d = s_dir[i], L = s_light[i] * weight;
+        p.sh[0].rgb += L * 0.282095;
+        p.sh[1].rgb += L * 0.488603 * d.y;
+        p.sh[2].rgb += L * 0.488603 * d.z;
+        p.sh[3].rgb += L * 0.488603 * d.x;
+        vec4 a = vec4(max(d.x, 0.0), max(-d.x, 0.0), max(d.y, 0.0), max(-d.y, 0.0)), b = vec4(max(d.z, 0.0), max(-d.z, 0.0), 0.0, 0.0);
+        a = pow(a, vec4(4.0)), b = pow(b, vec4(4.0));
+        float r = s_dist[i];
+        mean0 += a * r, sq0 += a * r * r, w0 += a;
+        mean1 += b * r, sq1 += b * r * r, w1 += b;
+        backs += s_back[i];
+    }
+    mean0 /= max(w0, vec4(1e-4)), sq0 /= max(w0, vec4(1e-4));
+    mean1 /= max(w1, vec4(1e-4)), sq1 /= max(w1, vec4(1e-4));
+    p.dist[0] = mean0;                                  // +x -x +y -y
+    p.dist[1] = vec4(mean1.xy, sq0.xy);                 // +z -z, then squares +x -x
+    p.dist[2] = vec4(sq0.zw, sq1.xy);                   // squares +y -y +z -z
+    // Stuck in a wall (many rays see backs): don't trust it.
+    p.sh[0].w = float(backs) > float(kRays) * 0.25 ? 0.0 : 1.0;
+    p.tag = vec4(vec3(cell), 1.0);
+    if (!fresh) {
+        float h = pc.hysteresis;
+        for (int i = 0; i < 4; ++i) p.sh[i].rgb = mix(p.sh[i].rgb, old.sh[i].rgb, h);
+        for (int i = 0; i < 3; ++i) p.dist[i] = mix(p.dist[i], old.dist[i], 0.97); // shapes change slowly
+    }
+    pc.cur.p[probe] = p;
+}

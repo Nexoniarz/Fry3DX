@@ -1,0 +1,5 @@
+build/
+.cache/
+*.blend1
+__pycache__/
+*.fry~

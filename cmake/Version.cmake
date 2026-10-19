@@ -1,0 +1,20 @@
+# Run at build time (cmake -P): writes keel_version.h from git — the commit, its date, and
+# whether the tree had changes. Not __DATE__: Nix's build shell pins SOURCE_DATE_EPOCH to 1980
+# (reproducible builds), and that's what the compiler's date said.
+execute_process(COMMAND git -C ${SRC} log -1 --format=%h OUTPUT_VARIABLE commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git -C ${SRC} log -1 --format=%cd --date=format:%Y-%m-%d\ %H:%M OUTPUT_VARIABLE date OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git -C ${SRC} status --porcelain --untracked-files=no OUTPUT_VARIABLE dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT commit)
+  set(commit "unknown")
+  set(date "unknown")
+endif()
+if(dirty)
+  set(commit "${commit}+changes")
+endif()
+set(text "#pragma once\n#define KEEL_COMMIT \"${commit}\"\n#define KEEL_COMMIT_DATE \"${date}\"\n")
+if(EXISTS ${OUT})
+  file(READ ${OUT} old)
+endif()
+if(NOT "${old}" STREQUAL "${text}")
+  file(WRITE ${OUT} "${text}")
+endif()

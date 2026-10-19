@@ -1,0 +1,59 @@
+#version 460
+// GPU occlusion culling (r_gpuculling): one thread per opaque draw. Its world box, projected the
+// way the occlusion grid's frame saw the world (last frame's view), is hidden if every grid texel
+// under it holds something nearer than the box's nearest point. Writes the draw's indirect command
+// (one instance or none) for the depth pre-pass and the scene pass, and counts the hidden ones.
+#include "backend.glsl"
+layout(local_size_x = 64) in;
+
+struct CullBox { vec4 lo; vec4 hi; uvec4 draw; }; // draw: index count, first index, test (1), -
+layout(buffer_reference, std430) readonly buffer Boxes { CullBox b[]; };
+struct Cmd { uint indexCount, instanceCount, firstIndex; int vertexOffset; uint firstInstance; };
+layout(buffer_reference, std430) writeonly buffer Cmds { Cmd c[]; };
+layout(buffer_reference, std430) buffer Counter { uint hidden; };
+
+PUSH_BLOCK {
+    mat4 viewProj;   // the frame the grid was made from
+    Boxes boxes;
+    Cmds cmds;
+    Counter counter;
+    uint count;
+    uint hzb;        // the pyramid's first level (kHzbLevels slots, each half the last)
+    uint occlusion;  // 0: the camera moved too much since (draw everything in view)
+    uint pad;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    CullBox b = pc.boxes.b[i];
+    bool visible = true;
+    if (pc.occlusion != 0u && (b.draw.z & 1u) != 0u) {
+        vec3 mn = vec3(1e9), mx = vec3(-1e9);
+        bool behind = false;
+        for (int k = 0; k < 8; ++k) {
+            vec3 c = vec3((k & 1) != 0 ? b.hi.x : b.lo.x, (k & 2) != 0 ? b.hi.y : b.lo.y, (k & 4) != 0 ? b.hi.z : b.lo.z);
+            vec4 p = pc.viewProj * vec4(c, 1.0);
+            if (p.w <= 0.001) { behind = true; break; } // crosses the eye: can't tell, draw it
+            vec3 n = p.xyz / p.w;
+            mn = min(mn, n), mx = max(mx, n);
+        }
+        if (!behind) {
+            // The level where the box covers a few texels (each holds the farthest depth under
+            // it, so testing there never hides what's visible).
+            vec2 size0 = vec2(texSize(pc.hzb));
+            vec2 extent = (mx.xy - mn.xy) * 0.5 * size0;
+            uint level = uint(clamp(ceil(log2(max(max(extent.x, extent.y), 1.0) / 3.0)), 0.0, 7.0));
+            uint tex = pc.hzb + level;
+            ivec2 size = texSize(tex);
+            ivec2 a = clamp(ivec2(floor((mn.xy * 0.5 + 0.5) * vec2(size))), ivec2(0), size - 1);
+            ivec2 z = clamp(ivec2(floor((mx.xy * 0.5 + 0.5) * vec2(size))), ivec2(0), size - 1);
+            float far = 0.0;
+            for (int y = a.y; y <= z.y; ++y)
+                for (int x = a.x; x <= z.x; ++x) far = max(far, fetchTex(tex, ivec2(x, y)).r);
+            if (mn.z > far + 1e-5) visible = false;
+        }
+    }
+    pc.cmds.c[i] = Cmd(b.draw.x, visible ? 1u : 0u, b.draw.y, 0, 0u);
+    if (!visible) atomicAdd(pc.counter.hidden, 1u);
+}

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fry3DX</title>
+  <meta name="description" content="Fry3DX (Frying 3D Extreme): a 3D modeller that does what you'd expect. Made by Nexoniarz.">
+  <meta property="og:title" content="Fry3DX">
+  <meta property="og:description" content="A 3D modeller that does what you'd expect. Pick a tool, click, drag.">
+  <meta property="og:image" content="img/model.webp">
+  <link rel="icon" href="img/icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- The page is built from content.js by site.js: edit content.js to update it. -->
+  <header class="top">
+    <a class="brand" href="#"><img src="img/logo.svg" alt=""><span>Fry3DX</span></a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#look">Look</a>
+      <a href="#get">Get it</a>
+      <a href="#versions">Versions</a>
+      <a class="gh" id="gh-top" href="#">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-text">
+        <p class="kicker" id="long"></p>
+        <h1 id="tagline"></h1>
+        <p class="lead" id="intro"></p>
+        <div class="buttons">
+          <a class="btn hot" href="#get">Get Fry3DX</a>
+          <a class="btn" id="gh-hero" href="#">Source on GitHub</a>
+        </div>
+      </div>
+      <figure class="hero-shot"><img src="img/model.webp" alt="Fry3DX with a table, chair, barrel and crate"></figure>
+    </section>
+
+    <section class="why" id="why"></section>
+
+    <section id="features">
+      <h2>What it does</h2>
+      <div class="grid" id="feature-grid"></div>
+    </section>
+
+    <section id="look">
+      <h2>How it looks</h2>
+      <div class="tabs" id="shot-tabs" role="tablist"></div>
+      <figure class="shot"><img id="shot-img" alt=""><figcaption id="shot-text"></figcaption></figure>
+    </section>
+
+    <section class="two">
+      <div>
+        <h2>Files</h2>
+        <div id="formats"></div>
+      </div>
+      <div>
+        <h2>Keys that make sense</h2>
+        <table class="keys" id="keys"></table>
+      </div>
+    </section>
+
+    <section id="get">
+      <h2>Get it</h2>
+      <p id="build-text"></p>
+      <div class="code"><button class="copy" id="copy">Copy</button><pre id="build-steps"></pre></div>
+      <p class="muted" id="build-needs"></p>
+    </section>
+
+    <section id="versions">
+      <h2>Versions</h2>
+      <div id="version-list"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Fry3DX, made by <a id="author" href="#"></a>.</p>
+    <p class="muted">Sky pictures from Poly Haven (CC0).</p>
+  </footer>
+
+  <script src="content.js"></script>
+  <script src="site.js"></script>
+</body>
+</html>

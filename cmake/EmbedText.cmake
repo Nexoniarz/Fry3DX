@@ -1,0 +1,22 @@
+# cmake -DOUT=file.inc -DFILES="a;b" -P EmbedText.cmake
+# Writes { "name", "text" }, entries as C++ raw string literals, split into chunks so no single
+# literal is too long for MSVC.
+string(REPLACE "|" ";" FILES "${FILES}")
+set(result "")
+foreach(f ${FILES})
+  get_filename_component(name ${f} NAME)
+  file(READ ${f} text)
+  string(LENGTH "${text}" len)
+  set(literal "")
+  set(pos 0)
+  while(pos LESS len)
+    string(SUBSTRING "${text}" ${pos} 4000 chunk)
+    string(APPEND literal "R\"keel(${chunk})keel\"\n")
+    math(EXPR pos "${pos} + 4000")
+  endwhile()
+  if(literal STREQUAL "")
+    set(literal "\"\"")
+  endif()
+  string(APPEND result "{\"${name}\",\n${literal}},\n")
+endforeach()
+file(WRITE ${OUT} "${result}")

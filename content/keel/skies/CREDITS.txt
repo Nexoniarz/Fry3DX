@@ -1,0 +1,4 @@
+skies/day.hdr: "Kloofendal 48d Partly Cloudy (Pure Sky)" by Greg Zaal and Jarod Guest, Poly Haven, CC0 1.0 (public domain)
+https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+skies/afternoon.hdr: "Qwantani Afternoon (Pure Sky)" by Greg Zaal and Jarod Guest, Poly Haven, CC0 1.0 (public domain)
+https://polyhaven.com/a/qwantani_afternoon_puresky
