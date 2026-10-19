@@ -40,7 +40,11 @@ bool Window::init(const char* title, int width, int height, bool opengl) {
         log::error("SDL_Init failed: {}", SDL_GetError());
         return false;
     }
-    window_ = SDL_CreateWindow(title, width, height, (opengl ? SDL_WINDOW_OPENGL : SDL_WINDOW_VULKAN) | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags = (opengl ? SDL_WINDOW_OPENGL : SDL_WINDOW_VULKAN) | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__ANDROID__)
+    flags |= SDL_WINDOW_FULLSCREEN; // (the whole screen: no status or navigation bar over the edges)
+#endif
+    window_ = SDL_CreateWindow(title, width, height, flags);
     if (!window_) {
         log::error("SDL_CreateWindow failed: {}", SDL_GetError());
         return false;

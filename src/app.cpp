@@ -514,6 +514,7 @@ public:
         ImGuiIO& io = ImGui::GetIO();
         if (touch()) touchFrame(io);
         const ImGuiID dock = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+        if (touch() && (io.DisplaySize.y > io.DisplaySize.x) != portrait_) portrait_ = !portrait_, layoutDone_ = false; // (the phone turned: its layout)
         if (!layoutDone_) defaultLayout(dock);
         if (ImGuiDockNode* c = ImGui::DockBuilderGetCentralNode(dock)) viewMin_ = c->Pos, viewMax_ = ImVec2(c->Pos.x + c->Size.x, c->Pos.y + c->Size.y);
         updateCamera(io);
@@ -612,7 +613,7 @@ private:
         Scene before;
         std::set<std::pair<int, int>> bevelEdges;
     } drag_;
-    bool boxing_ = false, painting_ = false, lassoing_ = false;
+    bool boxing_ = false, painting_ = false, lassoing_ = false, tapDraw_ = false;
     ImVec2 boxStart_{0, 0};
     std::vector<ImVec2> lasso_;
     std::pair<int, int> cutHover_{-1, -1};
@@ -664,7 +665,7 @@ private:
     bool pasteOnSurface_ = true;
     uint32_t renamingFolder_ = 0;
     // Touch (set when it starts: fry_touch).
-    bool touchMode_ = false, panelsOpen_ = false, viewsOpen_ = false, shiftLatch_ = false, ctrlLatch_ = false, touchOrbit_ = false;
+    bool touchMode_ = false, portrait_ = false, showToolbox_ = false, panelsOpen_ = false, viewsOpen_ = false, shiftLatch_ = false, ctrlLatch_ = false, touchOrbit_ = false;
     struct Gesture {
         bool two = false, longDone = false, rightUp = false;
         ImVec2 mid{}, downPos{};
@@ -3260,7 +3261,7 @@ private:
             const float spread = std::max(std::hypot(fingers[0].x - fingers[1].x, fingers[0].y - fingers[1].y), 1.0f);
             if (!gest_.two && !drag_.active && inView(mid) && !ImGui::IsAnyItemActive()) { // two fingers: the first's tap or drag is off
                 gest_.two = true, gest_.mid = mid, gest_.spread = spread;
-                boxing_ = lassoing_ = touchOrbit_ = false;
+                boxing_ = lassoing_ = touchOrbit_ = tapDraw_ = false;
                 io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
             }
             if (gest_.two) {
@@ -3279,7 +3280,7 @@ private:
         if (std::hypot(p.x - gest_.downPos.x, p.y - gest_.downPos.y) > 12) gest_.downAt = now() + 1e9; // (moved: not a long press)
         if (!gest_.longDone && now() - gest_.downAt > 0.55 && !drag_.active) {
             gest_.longDone = true;
-            boxing_ = lassoing_ = touchOrbit_ = false;
+            boxing_ = lassoing_ = touchOrbit_ = tapDraw_ = false;
             io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
             io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
             gest_.rightUp = true;
@@ -4133,7 +4134,8 @@ private:
             if (touchOrbit_ && moved && ImGui::IsMouseDown(ImGuiMouseButton_Left)) orbitBy(io.MouseDelta);
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 boxing_ = false;
-                if (std::exchange(touchOrbit_, false) && moved) return;
+                if (std::exchange(touchOrbit_, false) && moved) return void(tapDraw_ = false);
+                if (std::exchange(tapDraw_, false)) return addDrawPoint(io);
                 if (std::hypot(io.MousePos.x - boxStart_.x, io.MousePos.y - boxStart_.y) > 4) {
                     const ImVec2 a(std::min(boxStart_.x, io.MousePos.x), std::min(boxStart_.y, io.MousePos.y)), b(std::max(boxStart_.x, io.MousePos.x), std::max(boxStart_.y, io.MousePos.y));
                     regionSelect([&](ImVec2 s) { return s.x >= a.x && s.x <= b.x && s.y >= a.y && s.y <= b.y; }, io.KeyShift, io.KeyCtrl, !io.KeyShift && !io.KeyCtrl);
@@ -4159,12 +4161,9 @@ private:
         }
         if (!mouseInView(io)) return;
         if (tool_ == Tool::Draw) {
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                if (auto p = drawPoint(io)) {
-                    ImVec2 s0, s1;
-                    if (drawPts_.size() >= 3 && project(drawPts_[0], s0) && project(*p, s1) && std::hypot(s0.x - s1.x, s0.y - s1.y) < 10) finishShape();
-                    else drawPts_.push_back(*p);
-                }
+            if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+            if (touch()) return void((boxing_ = touchOrbit_ = tapDraw_ = true, boxStart_ = io.MousePos)); // (a finger: a tap puts a point down when it lifts, a drag turns the view)
+            addDrawPoint(io);
             return;
         }
         if (tool_ == Tool::Knife) {
@@ -4215,6 +4214,13 @@ private:
                 paint(io);
             } else if (selShape_ == SelShape::Lasso) lassoing_ = true, lasso_ = {io.MousePos};
             else boxing_ = true, boxStart_ = io.MousePos, touchOrbit_ = touch() && tool_ != Tool::Select; // (a finger: dragging turns the view, but Select's box)
+        }
+    }
+    void addDrawPoint(const ImGuiIO& io) {
+        if (auto p = drawPoint(io)) {
+            ImVec2 s0, s1;
+            if (drawPts_.size() >= 3 && project(drawPts_[0], s0) && project(*p, s1) && std::hypot(s0.x - s1.x, s0.y - s1.y) < (touch() ? 24 : 10)) finishShape();
+            else drawPts_.push_back(*p);
         }
     }
     // Painting: on the model under the mouse.
@@ -4748,7 +4754,7 @@ private:
             }
             if (pts.size() >= 3) dl->AddPolyline(pts.data(), int(pts.size()), hole_.active ? kHot : IM_COL32(255, 255, 255, 200), ImDrawFlags_Closed, 2.0f);
         }
-        if (boxing_ && std::hypot(io.MousePos.x - boxStart_.x, io.MousePos.y - boxStart_.y) > 4) {
+        if (boxing_ && !touchOrbit_ && std::hypot(io.MousePos.x - boxStart_.x, io.MousePos.y - boxStart_.y) > 4) {
             dl->AddRectFilled(boxStart_, io.MousePos, IM_COL32(255, 140, 60, 30));
             dl->AddRect(boxStart_, io.MousePos, kAccent);
         }
@@ -4763,7 +4769,7 @@ private:
                 dl->AddCircleFilled(s, i == 0 ? 6.0f : 4.0f, i == 0 ? IM_COL32(255, 255, 255, 255) : kAccent);
                 prev = s;
             }
-            if (mouseInView(io))
+            if (mouseInView(io) && !touch()) // (a finger isn't hovering anywhere)
                 if (auto p = drawPoint(io); p && project(*p, s)) {
                     if (!drawPts_.empty()) dl->AddLine(prev, s, IM_COL32(255, 160, 90, 180), 1.5f);
                     dl->AddCircle(s, 5.0f, IM_COL32(255, 255, 255, 220), 0, 1.5f);
@@ -4903,9 +4909,19 @@ private:
     void defaultLayout(ImGuiID dock) {
         layoutDone_ = true;
         ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock);
-        if (node && (node->IsSplitNode() || node->Windows.Size)) return; // (the user's own, from the .ini)
+        if (!touch() && node && (node->IsSplitNode() || node->Windows.Size)) return; // (the user's own, from the .ini)
         ImGui::DockBuilderRemoveNodeChildNodes(dock);
+        ImGui::DockBuilderSetNodeSize(dock, ImGui::GetMainViewport()->WorkSize); // (splits are shares of this)
         ImGuiID center = dock;
+        if (touch() && portrait_) { // a phone held upright: the view on top, the panels as tabs under it
+            const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.36f, nullptr, &center);
+            const ImVec2 size = ImGui::GetMainViewport()->WorkSize;
+            ImGui::DockBuilderSetNodeSize(bottom, ImVec2(size.x, size.y * 0.36f));
+            for (const char* w : {"Toolbox", "Tool options", "Properties", "Layers", "Picture"}) ImGui::DockBuilderDockWindow(w, bottom);
+            ImGui::DockBuilderFinish(dock);
+            showToolbox_ = true; // (its tab first)
+            return;
+        }
         if (touch()) { // a phone: tools down the left, the panels on the right (shown when asked for)
             ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.2f, nullptr, &center);
             const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.45f, nullptr, &left);
@@ -5134,6 +5150,7 @@ private:
     }
 
     void toolbox() {
+        if (std::exchange(showToolbox_, false)) ImGui::SetNextWindowFocus();
         ImGui::Begin("Toolbox", nullptr, ImGuiWindowFlags_NoCollapse);
         const float w = ImGui::GetContentRegionAvail().x;
         if (tab_ == Tab::Paint) {

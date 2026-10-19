@@ -227,6 +227,9 @@ bool Device::createSwapchain() {
     vkDeviceWaitIdle(device_);
     VkSwapchainKHR old = swapchain_;
     auto sc = vkb::SwapchainBuilder(physical_, device_, surface_)
+#if defined(__ANDROID__) // (the compositor turns the picture with the phone: drawn as it's seen)
+                  .set_pre_transform_flags(VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+#endif
                   .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
                   .set_desired_present_mode(vsync_ ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR)
                   .add_fallback_present_mode(vsync_ ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR)
@@ -312,6 +315,13 @@ void Device::endFrame() {
     pi.pSwapchains = &swapchain_;
     pi.pImageIndices = &imageIndex_;
     VkResult r = vkQueuePresentKHR(queue_, &pi);
+#if defined(__ANDROID__) // (suboptimal every frame while the phone's turned: the compositor turns it; only a new size matters)
+    if (r == VK_SUBOPTIMAL_KHR) {
+        uint32_t w = 0, h = 0;
+        window_->pixelSize(w, h);
+        if (w == extent_.width && h == extent_.height) r = VK_SUCCESS;
+    }
+#endif
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swapchainDirty_ = true;
     else VK_CHECK(r);
 
