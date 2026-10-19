@@ -19,8 +19,8 @@ namespace keel {
 class Window;
 using TextureId = uint32_t;
 
-// OpenGL40/OpenGL31: the cut-down fallback for old GPUs (rhi/gl/gl_legacy.cpp).
-enum class RenderApi { Vulkan, OpenGL, OpenGL40, OpenGL31 };
+// OpenGL40/OpenGL31/GLES30: the cut-down fallback for old GPUs and phones (rhi/gl/gl_legacy.cpp).
+enum class RenderApi { Vulkan, OpenGL, OpenGL40, OpenGL31, GLES30 };
 
 // Texture slots. 0 and 1 are created by the renderer; 2-4 are the backend's render targets
 // (sampled through the same table); loaded textures start at kFirstTextureSlot.
@@ -235,6 +235,6 @@ public:
 
 std::unique_ptr<RenderBackend> createVulkanBackend();
 std::unique_ptr<RenderBackend> createOpenGLBackend();
-std::unique_ptr<RenderBackend> createLegacyOpenGLBackend(int major, int minor);
+std::unique_ptr<RenderBackend> createLegacyOpenGLBackend(int major, int minor, bool es = false);
 
 } // namespace keel

@@ -16,6 +16,9 @@ add_custom_target(keel_version COMMAND ${CMAKE_COMMAND} -DSRC=${PROJECT_SOURCE_D
 add_dependencies(keel keel_version)
 target_include_directories(keel PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(keel PRIVATE stb miniaudio opusfile)
+if(ANDROID)
+  target_link_libraries(keel PUBLIC log) # logcat
+endif()
 target_link_libraries(keel PUBLIC zstd_seekable glm::glm yapf SDL3::SDL3 volk vk-bootstrap::vk-bootstrap GPUOpen::VulkanMemoryAllocator imgui)
 target_compile_definitions(keel PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_ENABLE_EXPERIMENTAL VK_NO_PROTOTYPES)
 keel_add_shaders(keel shaders/box.vert shaders/box.frag shaders/mesh.vert shaders/mesh.frag shaders/depth.frag shaders/cull.comp shaders/froxel.comp shaders/froxel_rt.comp shaders/gi.comp shaders/skinned.vert

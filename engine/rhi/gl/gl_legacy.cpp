@@ -1,4 +1,5 @@
-// The fallback renderer for old GPUs: OpenGL 4.0 or 3.1, GLSL 1.40, nothing newer — bound
+// The fallback renderer for old GPUs: OpenGL 4.0 or 3.1 (GLSL 1.40), or OpenGL ES 3.0 for phones
+// without Vulkan (GLSL ES 3.00: no skinning, as it has no texture buffers), nothing newer — bound
 // textures, vertex attributes, one uniform block for the frame, a texture buffer for skinning.
 // Two tiers, cut down from the main renderer:
 //   4.0  lightmaps, sun with cascaded shadows (PCF), HDR sky, fog, normal maps, GGX highlights,
@@ -38,13 +39,11 @@ namespace {
     X(void, Viewport, (GLint, GLint, GLsizei, GLsizei))                                                              \
     X(void, Clear, (GLbitfield))                                                                                     \
     X(void, ClearColor, (GLfloat, GLfloat, GLfloat, GLfloat))                                                        \
-    X(void, ClearDepth, (GLdouble))                                                                                  \
     X(void, DepthFunc, (GLenum))                                                                                     \
     X(void, DepthMask, (GLboolean))                                                                                  \
     X(void, BlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum))                                                     \
     X(void, PolygonOffset, (GLfloat, GLfloat))                                                                       \
     X(void, PixelStorei, (GLenum, GLint))                                                                            \
-    X(void, DrawBuffer, (GLenum))                                                                                    \
     X(void, ReadBuffer, (GLenum))                                                                                    \
     X(void, ReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*))                                     \
     X(void, GenBuffers, (GLsizei, GLuint*))                                                                          \
@@ -59,7 +58,6 @@ namespace {
     X(void, ActiveTexture, (GLenum))                                                                                 \
     X(void, TexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*))                \
     X(void, TexParameteri, (GLenum, GLenum, GLint))                                                                  \
-    X(void, TexBuffer, (GLenum, GLenum, GLuint))                                                                     \
     X(void, GenFramebuffers, (GLsizei, GLuint*))                                                                     \
     X(void, DeleteFramebuffers, (GLsizei, const GLuint*))                                                            \
     X(void, BindFramebuffer, (GLenum, GLuint))                                                                       \
@@ -84,7 +82,6 @@ namespace {
     X(GLuint, CreateProgram, (void))                                                                                 \
     X(void, AttachShader, (GLuint, GLuint))                                                                          \
     X(void, BindAttribLocation, (GLuint, GLuint, const GLchar*))                                                     \
-    X(void, BindFragDataLocation, (GLuint, GLuint, const GLchar*))                                                   \
     X(void, LinkProgram, (GLuint))                                                                                   \
     X(void, GetProgramiv, (GLuint, GLenum, GLint*))                                                                  \
     X(void, GetProgramInfoLog, (GLuint, GLsizei, GLsizei*, GLchar*))                                                 \
@@ -96,10 +93,19 @@ namespace {
     X(void, Uniform1i, (GLint, GLint))                                                                               \
     X(void, Uniform4fv, (GLint, GLsizei, const GLfloat*))                                                            \
     X(void, UniformMatrix4fv, (GLint, GLsizei, GLboolean, const GLfloat*))
+// Desktop GL only, or ES only: whichever there is.
+#define KEEL_GLX_OPTIONAL(X)                                                                                         \
+    X(void, ClearDepth, (GLdouble))                                                                                  \
+    X(void, ClearDepthf, (GLfloat))                                                                                  \
+    X(void, DrawBuffer, (GLenum))                                                                                    \
+    X(void, DrawBuffers, (GLsizei, const GLenum*))                                                                   \
+    X(void, TexBuffer, (GLenum, GLenum, GLuint))                                                                     \
+    X(void, BindFragDataLocation, (GLuint, GLuint, const GLchar*))
 
 namespace glx {
 #define KEEL_GLX_DECLARE(ret, name, params) using name##_t = ret(APIENTRY*) params; name##_t name = nullptr;
 KEEL_GLX_FUNCTIONS(KEEL_GLX_DECLARE)
+KEEL_GLX_OPTIONAL(KEEL_GLX_DECLARE)
 #undef KEEL_GLX_DECLARE
 bool load() {
     std::string missing;
@@ -108,12 +114,15 @@ bool load() {
     if (!name) missing += " gl" #name;
     KEEL_GLX_FUNCTIONS(KEEL_GLX_LOAD)
 #undef KEEL_GLX_LOAD
+#define KEEL_GLX_LOAD_OPTIONAL(ret, name, params) name = reinterpret_cast<name##_t>(SDL_GL_GetProcAddress("gl" #name));
+    KEEL_GLX_OPTIONAL(KEEL_GLX_LOAD_OPTIONAL)
+#undef KEEL_GLX_LOAD_OPTIONAL
     if (!missing.empty()) log::warn("OpenGL (legacy): missing functions:{}", missing);
     return missing.empty();
 }
 } // namespace glx
 
-// ── Shaders (GLSL 1.40; TIER is 1 for GL 3.1, 2 for 4.0) ──
+// ── Shaders (GLSL 1.40 or ES 3.00; TIER is 1 for GL 3.1, 2 for 4.0 and ES 3.0) ──
 const char* kFrameBlock = R"(
 layout(std140) uniform Frame { // (GLSL 1.40: no instance name, so the members say F_)
     mat4 F_cascades[4];
@@ -126,12 +135,16 @@ const char* kMeshVert = R"(
 in vec3 a_pos; in vec3 a_normal; in vec2 a_uv; in vec2 a_lmuv; in uvec4 a_joints; in vec4 a_weights;
 uniform mat4 u_viewProj, u_model;
 uniform int u_skinned, u_firstJoint;
-uniform samplerBuffer u_joints;
 out vec3 v_normal, v_world; out vec2 v_uv, v_lmuv;
+#ifdef GL_ES
+mat4 joint(uint j) { return u_model; } // (never skinned here)
+#else
+uniform samplerBuffer u_joints;
 mat4 joint(uint j) {
     int b = (u_firstJoint + int(j)) * 4;
     return mat4(texelFetch(u_joints, b), texelFetch(u_joints, b + 1), texelFetch(u_joints, b + 2), texelFetch(u_joints, b + 3));
 }
+#endif
 void main() {
     mat4 m = u_model;
     if (u_skinned != 0)
@@ -345,6 +358,33 @@ out vec4 o_color;
 void main() { o_color = vec4(u_color.rgb * (0.5 + 0.5 * max(dot(v_normal, normalize(vec3(0.4, 0.3, 0.85))), 0.0)), u_color.a); }
 )";
 
+// Sprites and streaks (the grid, the axes, particles): a quad facing the camera, textured, unlit.
+const char* kSpriteVert = R"(
+uniform mat4 u_viewProj;
+uniform vec4 u_posSize, u_right, u_up; // right.w: turn (radians)
+out vec2 v_uv;
+const vec2 kQuad[6] = vec2[](vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,-1), vec2(1,1), vec2(-1,1));
+void main() {
+    vec2 q = kQuad[gl_VertexID];
+    float c = cos(u_right.w), s = sin(u_right.w);
+    vec2 r = vec2(c * q.x - s * q.y, s * q.x + c * q.y);
+    vec3 world = u_posSize.xyz + (u_right.xyz * r.x + u_up.xyz * r.y) * u_posSize.w;
+    v_uv = vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    gl_Position = u_viewProj * vec4(world, 1.0);
+    gl_Position.z = gl_Position.z * 2.0 - gl_Position.w;
+}
+)";
+const char* kSpriteFrag = R"(
+in vec2 v_uv;
+uniform sampler2D u_albedo;
+uniform vec4 u_color;
+out vec4 o_color;
+void main() {
+    vec4 t = texture(u_albedo, v_uv);
+    o_color = vec4(t.rgb * u_color.rgb, clamp((t.a - 0.03) / 0.97, 0.0, 1.0) * u_color.a);
+}
+)";
+
 const char* kTonemapVert = R"(
 out vec2 v_uv;
 void main() {
@@ -376,13 +416,13 @@ constexpr int kMaxLegacyLights = 16;
 struct Program {
     GLuint id = 0;
     GLint viewProj = -1, model = -1, skinned = -1, firstJoint = -1, tint = -1, params = -1, plane = -1, flags = -1, cube = -1,
-          invViewProj = -1, center = -1, extents = -1, color = -1, exposure = -1;
+          invViewProj = -1, center = -1, extents = -1, color = -1, exposure = -1, posSize = -1, right = -1, up = -1;
 };
 
 class LegacyGLBackend final : public RenderBackend {
 public:
-    explicit LegacyGLBackend(int major, int minor) : major_(major), minor_(minor), tier_(major >= 4 ? 2 : 1) {
-        name_ = "OpenGL " + std::to_string(major) + "." + std::to_string(minor) + " (fallback)";
+    LegacyGLBackend(int major, int minor, bool es) : major_(major), minor_(minor), tier_(major >= 4 || es ? 2 : 1), es_(es) {
+        name_ = std::string(es ? "OpenGL ES " : "OpenGL ") + std::to_string(major) + "." + std::to_string(minor) + " (fallback)";
     }
     const char* name() const override { return name_.c_str(); }
     GpuInfo gpuInfo() const override { return gpu_; }
@@ -393,8 +433,8 @@ public:
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, major_);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor_);
         // 3.1 has no profiles; 4.0 asks for core.
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, major_ >= 4 ? SDL_GL_CONTEXT_PROFILE_CORE : 0);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, major_ >= 4 ? 0 : SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, es_ ? SDL_GL_CONTEXT_PROFILE_ES : major_ >= 4 ? SDL_GL_CONTEXT_PROFILE_CORE : 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, major_ >= 4 || es_ ? 0 : SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
         context_ = SDL_GL_CreateContext(window_);
@@ -409,23 +449,29 @@ public:
         glx::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glx::PixelStorei(GL_PACK_ALIGNMENT, 1);
 
-        const std::string header = "#version 140\n#define TIER " + std::to_string(tier_) + "\n" + kFrameBlock;
+        const std::string header = std::string(es_ ? "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n"
+                                                     "precision highp sampler2DShadow;\n"
+                                                   : "#version 140\n") +
+                                   "#define TIER " + std::to_string(tier_) + "\n" + kFrameBlock;
         mesh_ = link(header + kMeshVert, header + kMeshFrag);
         depth_ = link(header + kMeshVert, header + kDepthFrag);
         sky_ = link(header + kSkyVert, header + kSkyFrag);
         box_ = link(header + kBoxVert, header + kBoxFrag);
         tonemap_ = link(header + kTonemapVert, header + kTonemapFrag);
-        if (!mesh_.id || !depth_.id || !sky_.id || !box_.id || !tonemap_.id) return false;
+        sprite_ = link(header + kSpriteVert, header + kSpriteFrag);
+        if (!mesh_.id || !depth_.id || !sky_.id || !box_.id || !tonemap_.id || !sprite_.id) return false;
 
         glx::GenBuffers(1, &frameUbo_);
         glx::BindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
         glx::BufferData(GL_UNIFORM_BUFFER, sizeof(FrameBlock), nullptr, GL_DYNAMIC_DRAW);
-        glx::GenBuffers(1, &jointBuffer_);
-        glx::BindBuffer(GL_TEXTURE_BUFFER, jointBuffer_);
-        glx::BufferData(GL_TEXTURE_BUFFER, kMaxJointsPerFrame * sizeof(glm::mat4), nullptr, GL_DYNAMIC_DRAW);
-        glx::GenTextures(1, &jointTexture_);
-        glx::BindTexture(GL_TEXTURE_BUFFER, jointTexture_);
-        glx::TexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, jointBuffer_);
+        if (glx::TexBuffer && !es_) {
+            glx::GenBuffers(1, &jointBuffer_);
+            glx::BindBuffer(GL_TEXTURE_BUFFER, jointBuffer_);
+            glx::BufferData(GL_TEXTURE_BUFFER, kMaxJointsPerFrame * sizeof(glm::mat4), nullptr, GL_DYNAMIC_DRAW);
+            glx::GenTextures(1, &jointTexture_);
+            glx::BindTexture(GL_TEXTURE_BUFFER, jointTexture_);
+            glx::TexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, jointBuffer_);
+        }
         glx::GenVertexArrays(1, &emptyVao_);
 
         // The sun's shadow map: 2×2 cascades, smaller on the 3.1 tier.
@@ -442,7 +488,9 @@ public:
         glx::GenFramebuffers(1, &shadowFbo_);
         glx::BindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
         glx::FramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowMap_, 0);
-        glx::DrawBuffer(GL_NONE);
+        const GLenum none = GL_NONE;
+        if (glx::DrawBuffer) glx::DrawBuffer(GL_NONE);
+        else if (glx::DrawBuffers) glx::DrawBuffers(1, &none);
         glx::ReadBuffer(GL_NONE);
         glx::BindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -450,7 +498,7 @@ public:
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::StyleColorsDark();
-        imgui_ = ImGui_ImplSDL3_InitForOpenGL(window_, context_) && ImGui_ImplOpenGL3_Init("#version 140");
+        imgui_ = ImGui_ImplSDL3_InitForOpenGL(window_, context_) && ImGui_ImplOpenGL3_Init(es_ ? "#version 300 es" : "#version 140");
         log::info("Fallback renderer: tier {} ({})", tier_, tier_ >= 2 ? "shadows, normal maps, highlights, sky reflections, 16 lights" : "lightmaps, sun shadows, sky");
         return imgui_;
     }
@@ -584,7 +632,7 @@ private:
         glx::AttachShader(p.id, f);
         const char* attrs[] = {"a_pos", "a_normal", "a_uv", "a_lmuv", "a_joints", "a_weights"};
         for (GLuint i = 0; i < 6; ++i) glx::BindAttribLocation(p.id, i, attrs[i]);
-        glx::BindFragDataLocation(p.id, 0, "o_color");
+        if (glx::BindFragDataLocation) glx::BindFragDataLocation(p.id, 0, "o_color"); // (ES: the only output is 0)
         glx::LinkProgram(p.id);
         glx::DeleteShader(v);
         glx::DeleteShader(f);
@@ -603,6 +651,7 @@ private:
         p.viewProj = u("u_viewProj"), p.model = u("u_model"), p.skinned = u("u_skinned"), p.firstJoint = u("u_firstJoint");
         p.tint = u("u_tint"), p.params = u("u_params"), p.plane = u("u_plane"), p.flags = u("u_flags"), p.cube = u("u_cube");
         p.invViewProj = u("u_invViewProj"), p.center = u("u_center"), p.extents = u("u_extents"), p.color = u("u_color"), p.exposure = u("u_exposure");
+        p.posSize = u("u_posSize"), p.right = u("u_right"), p.up = u("u_up");
         // Fixed texture units.
         glx::UseProgram(p.id);
         const struct { const char* name; GLint unit; } units[] = {{"u_albedo", 0}, {"u_lightmap", 1}, {"u_material", 2}, {"u_skyVis", 3},
@@ -628,13 +677,18 @@ private:
     void ensureTargets(uint32_t w, uint32_t h) {
         if (sceneFbo_ && w == targetW_ && h == targetH_) return;
         releaseTargets();
-        glx::GenTextures(1, &sceneTex_);
-        glx::BindTexture(GL_TEXTURE_2D, sceneTex_);
-        glx::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, GLsizei(w), GLsizei(h), 0, GL_RGBA, GL_FLOAT, nullptr);
-        glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // HDR, or (a phone that can't draw into half floats) plain 8 bits: brights clip.
+        auto colour = [&](bool hdr) {
+            if (sceneTex_) glx::DeleteTextures(1, &sceneTex_);
+            glx::GenTextures(1, &sceneTex_);
+            glx::BindTexture(GL_TEXTURE_2D, sceneTex_);
+            glx::TexImage2D(GL_TEXTURE_2D, 0, hdr ? GL_RGBA16F : GL_RGBA8, GLsizei(w), GLsizei(h), 0, GL_RGBA, hdr ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr);
+            glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glx::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        };
+        colour(!ldrTarget_);
         glx::GenTextures(1, &sceneDepth_);
         glx::BindTexture(GL_TEXTURE_2D, sceneDepth_);
         glx::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, GLsizei(w), GLsizei(h), 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
@@ -644,6 +698,12 @@ private:
         glx::BindFramebuffer(GL_FRAMEBUFFER, sceneFbo_);
         glx::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sceneTex_, 0);
         glx::FramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, sceneDepth_, 0);
+        if (!ldrTarget_ && glx::CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            log::warn("OpenGL (legacy): can't draw into half floats; the scene is 8 bits");
+            ldrTarget_ = true;
+            colour(false);
+            glx::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sceneTex_, 0);
+        }
         if (glx::CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) log::error("OpenGL (legacy): scene framebuffer incomplete");
         glx::BindFramebuffer(GL_FRAMEBUFFER, 0);
         targetW_ = w, targetH_ = h;
@@ -656,10 +716,11 @@ private:
 
     std::string name_;
     int major_, minor_, tier_;
+    bool es_ = false, ldrTarget_ = false;
     SDL_Window* window_ = nullptr;
     SDL_GLContext context_ = nullptr;
     bool imgui_ = false;
-    Program mesh_, depth_, sky_, box_, tonemap_;
+    Program mesh_, depth_, sky_, box_, tonemap_, sprite_;
     std::vector<GLuint> textures_;
     std::vector<Model> models_;
     GLuint frameUbo_ = 0, jointBuffer_ = 0, jointTexture_ = 0, emptyVao_ = 0;
@@ -724,12 +785,14 @@ void LegacyGLBackend::render(FramePacket& p) {
     glx::BindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
     glx::BufferSubData(GL_UNIFORM_BUFFER, 0, sizeof fb, &fb);
     glx::BindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo_);
-    if (!p.joints.empty()) {
+    if (!p.joints.empty() && jointBuffer_) {
         glx::BindBuffer(GL_TEXTURE_BUFFER, jointBuffer_);
         glx::BufferSubData(GL_TEXTURE_BUFFER, 0, GLsizeiptr(std::min(p.joints.size(), size_t(kMaxJointsPerFrame)) * sizeof(glm::mat4)), p.joints.data());
     }
-    glx::ActiveTexture(GL_TEXTURE6);
-    glx::BindTexture(GL_TEXTURE_BUFFER, jointTexture_);
+    if (jointTexture_) {
+        glx::ActiveTexture(GL_TEXTURE6);
+        glx::BindTexture(GL_TEXTURE_BUFFER, jointTexture_);
+    }
     glx::Disable(GL_CULL_FACE);
     glx::Disable(GL_BLEND);
     glx::Enable(GL_DEPTH_TEST);
@@ -739,7 +802,7 @@ void LegacyGLBackend::render(FramePacket& p) {
     // ── Sun shadows (light shadows aren't drawn on this renderer) ──
     glx::BindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
     glx::Viewport(0, 0, GLsizei(shadowSize_), GLsizei(shadowSize_));
-    glx::ClearDepth(1.0);
+    glx::ClearDepth ? glx::ClearDepth(1.0) : glx::ClearDepthf(1.0f);
     glx::Clear(GL_DEPTH_BUFFER_BIT);
     glx::Enable(GL_POLYGON_OFFSET_FILL);
     glx::PolygonOffset(2.5f, 2.0f);
@@ -789,6 +852,31 @@ void LegacyGLBackend::render(FramePacket& p) {
         glx::DepthMask(GL_TRUE);
         glx::Disable(GL_BLEND);
     }
+    if (!p.sprites.empty() || !p.glowSprites.empty()) { // depth-tested, not written; blended, then added on
+        glx::UseProgram(sprite_.id);
+        glx::UniformMatrix4fv(sprite_.viewProj, 1, GL_FALSE, glm::value_ptr(p.viewProj));
+        glx::BindVertexArray(emptyVao_);
+        glx::Enable(GL_BLEND);
+        glx::DepthMask(GL_FALSE);
+        auto draw = [&](const std::vector<gpu::Sprite>& sprites) {
+            for (const gpu::Sprite& sp : sprites) {
+                uint32_t tex = 0;
+                std::memcpy(&tex, &sp.up.w, 4); // (the texture's index, as the float's bits)
+                bindTexture(0, TextureId(tex));
+                glx::Uniform4fv(sprite_.posSize, 1, glm::value_ptr(sp.posSize));
+                glx::Uniform4fv(sprite_.color, 1, glm::value_ptr(sp.color));
+                glx::Uniform4fv(sprite_.right, 1, glm::value_ptr(sp.right));
+                glx::Uniform4fv(sprite_.up, 1, glm::value_ptr(sp.up));
+                glx::DrawArrays(GL_TRIANGLES, 0, 6);
+            }
+        };
+        glx::BlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        draw(p.sprites);
+        glx::BlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
+        draw(p.glowSprites);
+        glx::DepthMask(GL_TRUE);
+        glx::Disable(GL_BLEND);
+    }
 
     // ── Tonemap to the window, then UI ──
     glx::BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -817,6 +905,6 @@ void LegacyGLBackend::render(FramePacket& p) {
 }
 } // namespace
 
-std::unique_ptr<RenderBackend> createLegacyOpenGLBackend(int major, int minor) { return std::make_unique<LegacyGLBackend>(major, minor); }
+std::unique_ptr<RenderBackend> createLegacyOpenGLBackend(int major, int minor, bool es) { return std::make_unique<LegacyGLBackend>(major, minor, es); }
 
 } // namespace keel

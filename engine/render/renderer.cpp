@@ -114,6 +114,7 @@ bool Renderer::init(const Window& window, bool validation, RenderApi api) {
     case RenderApi::OpenGL: backend_ = createOpenGLBackend(); break;
     case RenderApi::OpenGL40: backend_ = createLegacyOpenGLBackend(4, 0); break;
     case RenderApi::OpenGL31: backend_ = createLegacyOpenGLBackend(3, 1); break;
+    case RenderApi::GLES30: backend_ = createLegacyOpenGLBackend(3, 0, true); break;
     default: backend_ = createVulkanBackend(); break;
     }
     if (!backend_->init(window, validation)) {

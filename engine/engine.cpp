@@ -60,7 +60,7 @@ Cvar vid_mode("vid_mode", "0", CVAR_ARCHIVE, "0 = window, 1 = borderless fullscr
 Cvar vid_width("vid_width", "1600", CVAR_ARCHIVE, "Window / fullscreen width");
 Cvar vid_height("vid_height", "900", CVAR_ARCHIVE, "Window / fullscreen height");
 Cvar r_renderer("r_renderer", "vulkan", CVAR_ARCHIVE,
-               "Graphics API: vulkan, opengl (4.6), or the cut-down fallbacks for old GPUs: opengl40, opengl31 (restart needed)");
+               "Graphics API: vulkan, opengl (4.6), or the cut-down fallbacks for old GPUs: opengl40, opengl31, gles (OpenGL ES 3.0) (restart needed)");
 Cvar hotreload("hotreload", "1", CVAR_ARCHIVE,
                 "Reload textures, models, sounds, scripts and the map when their files change (with tools/watch.py compiling as you save)");
 Cvar fps_max_menu("fps_max_menu", "120", CVAR_ARCHIVE, "Frame rate limit in menus and while paused (0 = same as fps_max)");
@@ -283,12 +283,25 @@ int runClient(Game& game) {
     const int w = std::max(vid_width.i(), 640), h = std::max(vid_height.i(), 480);
     // The API asked for, then the others: the modern pair, then the fallbacks for old GPUs.
     const std::string want = r_renderer.str();
-    const RenderApi first = want == "opengl" ? RenderApi::OpenGL : want == "opengl40" ? RenderApi::OpenGL40 : want == "opengl31" ? RenderApi::OpenGL31 : RenderApi::Vulkan;
+    // (A phone has only Vulkan and OpenGL ES.)
+    RenderApi first = want == "opengl" ? RenderApi::OpenGL : want == "opengl40" ? RenderApi::OpenGL40 : want == "opengl31" ? RenderApi::OpenGL31
+                    : want == "gles" ? RenderApi::GLES30 : RenderApi::Vulkan;
+#if defined(__ANDROID__)
+    if (first != RenderApi::Vulkan) first = RenderApi::GLES30;
+    const std::initializer_list<RenderApi> all{RenderApi::Vulkan, RenderApi::GLES30};
+#else
+    const std::initializer_list<RenderApi> all{RenderApi::Vulkan, RenderApi::OpenGL, RenderApi::OpenGL40, RenderApi::OpenGL31, RenderApi::GLES30};
+#endif
     std::vector<RenderApi> order{first};
-    for (RenderApi a : {RenderApi::Vulkan, RenderApi::OpenGL, RenderApi::OpenGL40, RenderApi::OpenGL31})
-        if (std::find(order.begin(), order.end(), a) == order.end() && (first != RenderApi::OpenGL31 || a == RenderApi::OpenGL31)) order.push_back(a);
+    for (RenderApi a : all)
+        if (std::find(order.begin(), order.end(), a) == order.end() && (first != RenderApi::OpenGL31 || a == RenderApi::OpenGL31 || a == RenderApi::GLES30)) order.push_back(a);
     bool ok = false;
     for (RenderApi api : order) {
+        if (api == RenderApi::GLES30) { // (before the window: a phone picks its surface's kind when it's made)
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        }
         ok = window.init(game.title(), w, h, api != RenderApi::Vulkan) && renderer.init(window, r_validation.b(), api);
         if (ok) {
             if (api != first)

@@ -3,7 +3,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.nexoniarz.fry3dx"
     android:installLocation="auto">
-    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x403000" android:required="true" />
+    <!-- Vulkan 1.3 if the phone has it, otherwise OpenGL ES 3.0 (a simpler look) -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x403000" android:required="false" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <application
         android:label="Fry3DX"

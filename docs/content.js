@@ -25,13 +25,13 @@ window.FRY = {
     { icon: "◫", title: "Real shape editing", text: "Points, edges and faces. Extrude, inset, round edges, loop cut, knife, merge. Shift+click picks a whole loop, Shift+Ctrl+click a ring." },
     { icon: "◎", title: "Holes for screws and nuts", text: "Round, rectangle, triangle or hexagon. M2 to M8 screw and nut sizes ready, with a little room added so the print actually fits." },
     { icon: "▤", title: "Copies and thickness", text: "Copies in a row or round in a circle. Make a surface thick, or a solid hollow with walls exactly as thick as you need." },
-    { icon: "🖌", title: "Paint and stickers", text: "Paint on the model or on its flat picture. Paste any picture (Ctrl+V) and it goes on like a sticker that bends over edges and corners." },
+    { icon: "✐", title: "Paint and stickers", text: "Paint on the model or on its flat picture. Paste any picture (Ctrl+V) and it goes on like a sticker that bends over edges and corners." },
     { icon: "▦", title: "Layout tab", text: "Move, turn and size the flat frames of the surface by hand. The paint follows, so the model looks the same." },
     { icon: "⎙", title: "Made for 3D printing", text: "Your printer's plate in the view, sizes in millimetres, checks for holes and flipped faces with fix buttons, overhangs shown red, weight and filament." },
     { icon: "☀", title: "See it rendered", text: "Solid view for modelling, a real renderer with sky, sun and soft shadows when you want to see it properly. Save a picture with F12." },
-    { icon: "🗀", title: "Folders and groups", text: "Layers with folders inside folders, drag and drop, show/hide and lock whole groups, and a button on every row that brings the camera to it." },
-    { icon: "📱", title: "On your phone too", text: "Not a viewer: the whole modeller. Big buttons, one finger turns the view, two move and pinch to zoom, holding still is a right-click. Files through the phone's own picker." },
-    { icon: "💾", title: "Never lose work", text: "Its own packed .fry file, autosave in the background, recovery after a crash, and a Save / Don't save / Cancel when closing." },
+    { icon: "▭", title: "Folders and groups", text: "Layers with folders inside folders, drag and drop, show/hide and lock whole groups, and a button on every row that brings the camera to it." },
+    { icon: "▯", title: "On your phone too", text: "Not a viewer: the whole modeller. Big buttons, one finger turns the view, two move and pinch to zoom, holding still is a right-click. Files through the phone's own picker." },
+    { icon: "⟲", title: "Never lose work", text: "Its own packed .fry file, autosave in the background, recovery after a crash, and a Save / Don't save / Cancel when closing." },
   ],
 
   shots: [
