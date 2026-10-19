@@ -62,7 +62,7 @@ jobs:
       - name: SDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "build-tools;35.0.0" "platforms;android-35" > /dev/null
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y ninja-build glslc
       - name: Build
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018

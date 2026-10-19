@@ -44,8 +44,12 @@ def main():
     llvm = os.path.join(ndk, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin")
 
     if not os.path.isdir(BUILD):
-        glslc = os.environ.get("GLSLC") or os.path.join(ndk, "shader-tools", "linux-x86_64", "glslc")  # (the NDK's own, if none's given)
-        run("cmake", "--preset", "android", *([f"-DGLSLC={glslc}"] if os.path.exists(glslc) else []), cwd=ROOT)
+        # A current glslc: $GLSLC, or the one on PATH. (Not the NDK's: its 2022 shaderc makes compute
+        # shaders some phone drivers can't build, e.g. the Galaxy S22's.)
+        glslc = os.environ.get("GLSLC") or shutil.which("glslc")
+        if not glslc:
+            sys.exit("No glslc: install shaderc (or the Vulkan SDK), or set GLSLC")
+        run("cmake", "--preset", "android", f"-DGLSLC={glslc}", cwd=ROOT)
     run("cmake", "--build", "--preset", "android", cwd=ROOT)
 
     stage = os.path.join(BUILD, "apk")

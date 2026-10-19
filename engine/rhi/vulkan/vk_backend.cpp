@@ -671,7 +671,7 @@ private:
     Texture hzbMips_[kHzbLevels]; // [0] unused (that's hzb_)
     uint32_t gpuCulled_ = 0;
     const vk::Buffer* cullFor_ = nullptr; // this frame's commands, while the opaque lists are drawn
-    bool gpuCulling() const override { return true; }
+    bool gpuCulling() const override { return cullPipeline_ != VK_NULL_HANDLE; }
     // The fog grid (froxel.comp): two cell buffers (this frame's, last frame's) and the integrated one.
     struct FroxelPush { VkDeviceAddress frame, cur, prev, integrated; glm::vec4 proj, prevPos, prevFwd; uint32_t mode, frameIndex; VkDeviceAddress tlas, smoke, smokeSky; glm::vec4 smokeOrigin; };
     struct SmokeSkyPush { VkDeviceAddress frame, sky; };
@@ -685,7 +685,7 @@ private:
     VkPipeline froxelPipeline_ = VK_NULL_HANDLE, froxelRtPipeline_ = VK_NULL_HANDLE; // (rays: sky seen from each cell)
     uint32_t froxelFrame_ = 0;
     glm::vec4 froxelPrevPos_{0.0f}, froxelPrevFwd_{0.0f};
-    bool froxelFog() const override { return true; }
+    bool froxelFog() const override { return froxelPipeline_ != VK_NULL_HANDLE; }
     // Real-time GI (gi.comp): the scene for rays (per frame in flight), and the probes (this
     // frame's, last frame's).
     struct Tlas {
@@ -924,8 +924,10 @@ void VulkanBackend::createPipelines() {
     adaptPipeline_ = makePipeline(dev, layout_, {kFullscreenVert, sizeof kFullscreenVert, kAdaptFrag, sizeof kAdaptFrag, kSceneFormat, false});
     ssrPipeline_ = makePipeline(dev, layout_, {kFullscreenVert, sizeof kFullscreenVert, kSsrFrag, sizeof kSsrFrag, kSceneFormat, false});
     shadowMeshPipeline_ = makePipeline(dev, layout_, {kMeshVert, sizeof kMeshVert, nullptr, 0, VK_FORMAT_UNDEFINED, true, true});
-    // Compute pipelines (GPU culling, the fog grid), on the same layout.
-    auto compute = [&](const uint32_t* code, size_t size, VkPipeline& out) {
+    // Compute pipelines (GPU culling, the fog grid, ray-traced light), on the same layout. All of
+    // them are extras: one a driver can't build is left out (and what it does is off). (The
+    // Galaxy S22's driver says it has ray queries but can't build gi.comp or froxel_rt.comp.)
+    auto compute = [&](const char* name, const uint32_t* code, size_t size, VkPipeline& out) {
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         ci.codeSize = size;
         ci.pCode = code;
@@ -934,12 +936,15 @@ void VulkanBackend::createPipelines() {
         VkComputePipelineCreateInfo pi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         pi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main", nullptr};
         pi.layout = layout_;
-        VK_CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pi, nullptr, &out));
+        if (const VkResult res = vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &pi, nullptr, &out); res != VK_SUCCESS) {
+            log::warn("The graphics driver couldn't build the {} shader (VkResult {}): it's off", name, int(res));
+            out = VK_NULL_HANDLE;
+        }
         vkDestroyShaderModule(dev, m, nullptr);
     };
-    compute(kCullComp, sizeof kCullComp, cullPipeline_);
-    compute(kFroxelComp, sizeof kFroxelComp, froxelPipeline_);
-    if (device_.rayQuery()) compute(kGiComp, sizeof kGiComp, giPipeline_), compute(kFroxelRtComp, sizeof kFroxelRtComp, froxelRtPipeline_);
+    compute("GPU culling", kCullComp, sizeof kCullComp, cullPipeline_);
+    compute("fog grid", kFroxelComp, sizeof kFroxelComp, froxelPipeline_);
+    if (device_.rayQuery()) compute("ray-traced light", kGiComp, sizeof kGiComp, giPipeline_), compute("ray-traced fog", kFroxelRtComp, sizeof kFroxelRtComp, froxelRtPipeline_);
     // Depth pre-pass, and the scene's opaque meshes after it.
     depthMeshPipeline_ = makePipeline(dev, layout_, {kMeshVert, sizeof kMeshVert, kDepthFrag, sizeof kDepthFrag, VK_FORMAT_UNDEFINED, true});
     depthSkinnedPipeline_ = makePipeline(dev, layout_, {kSkinnedVert, sizeof kSkinnedVert, kDepthFrag, sizeof kDepthFrag, VK_FORMAT_UNDEFINED, true});
