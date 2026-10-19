@@ -1125,8 +1125,8 @@ private:
             std::getline(in, from);
             std::error_code ec;
             // (in local time: through time_t, as not every C++ library has time zones yet)
-            const std::time_t t = std::chrono::system_clock::to_time_t(
-                std::chrono::time_point_cast<std::chrono::system_clock::duration>(stdfs::file_time_type::clock::to_sys(stdfs::last_write_time(f, ec))));
+            const auto age = stdfs::file_time_type::clock::now() - stdfs::last_write_time(f, ec); // (file clocks differ by library: by age)
+            const std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now() - std::chrono::duration_cast<std::chrono::system_clock::duration>(age));
             std::tm local{};
 #if defined(_WIN32)
             localtime_s(&local, &t);
