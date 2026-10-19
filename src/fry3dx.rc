@@ -1,0 +1,25 @@
+// Windows: the program's icon and details (Explorer's Properties).
+1 ICON "../branding/fry3dx.ico"
+1 VERSIONINFO
+FILEVERSION 0,5,0,0
+PRODUCTVERSION 0,5,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Nexoniarz"
+      VALUE "FileDescription", "Fry3DX - Frying 3D Extreme"
+      VALUE "FileVersion", "0.5.0"
+      VALUE "InternalName", "fry3dx"
+      VALUE "LegalCopyright", "Copyright 2026 Nexoniarz, Apache License 2.0"
+      VALUE "OriginalFilename", "fry3dx.exe"
+      VALUE "ProductName", "Fry3DX"
+      VALUE "ProductVersion", "0.5.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

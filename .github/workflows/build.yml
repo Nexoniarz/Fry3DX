@@ -1,0 +1,89 @@
+# Builds Fry3DX for Linux (a portable .tar.gz and an AppImage), Windows (.zip) and Android (.apk).
+# A tag v* (git tag v0.4.0 && git push --tags) also makes a GitHub release with them;
+# otherwise they're the run's artifacts (Actions tab).
+# Android signing: secrets FRY_KEYSTORE_B64 (the keystore, base64) and FRY_KEYSTORE_PASS. Keep
+# the same key: Android only updates an app signed with the key it was installed with.
+name: Build
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    # The oldest supported Ubuntu: what's built here runs on any distro as new (glibc 2.35+).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 ninja-build libfuse2 \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libegl-dev libdecor-0-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
+          pip install cmake==3.31.6
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+      - name: Build
+        env: { CC: gcc-13, CXX: g++-13 }
+        run: |
+          cmake --preset portable -DGLSLC=$ANDROID_NDK_HOME/shader-tools/linux-x86_64/glslc
+          cmake --build build/portable
+      - name: Package
+        run: APPIMAGETOOL=$PWD/appimagetool python3 tools/package.py linux appimage
+      - uses: actions/upload-artifact@v4
+        with: { name: linux, path: "dist/*" }
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: bash
+        run: |
+          GLSLC=$(ls -d "$ANDROID_NDK_HOME"/shader-tools/windows-x86_64/glslc.exe)
+          cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded "-DGLSLC=$GLSLC"
+          cmake --build build/windows
+      - name: Package
+        run: python tools/package.py windows
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: "dist/*" }
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - name: SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "build-tools;35.0.0" "platforms;android-35" > /dev/null
+          sudo apt-get install -y ninja-build
+      - name: Build
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          KEY_B64: ${{ secrets.FRY_KEYSTORE_B64 }}
+          FRY_KEYSTORE_PASS: ${{ secrets.FRY_KEYSTORE_PASS }}
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/27.2.12479018"
+          if [ -n "$KEY_B64" ]; then echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/fry.keystore"; export FRY_KEYSTORE="$RUNNER_TEMP/fry.keystore"; fi
+          python3 android/build_apk.py
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: "dist/*" }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, android]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

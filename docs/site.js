@@ -65,6 +65,14 @@
     keys.append(tr);
   }
 
+  const dl = $("downloads");
+  for (const d of F.downloads) {
+    const a = el("a", "download");
+    a.href = F.releases;
+    a.append(el("strong", null, d.os), el("span", "muted", d.what), el("span", "file", "Fry3DX-…-" + d.file), el("span", null, d.how));
+    dl.append(a);
+  }
+
   $("build-text").textContent = F.build.text;
   $("build-steps").textContent = F.build.steps.join("\n");
   $("build-needs").textContent = F.build.needs;

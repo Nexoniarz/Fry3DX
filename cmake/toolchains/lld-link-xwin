@@ -1,0 +1,6 @@
+#!/bin/sh
+X="${XWIN_DIR:-$HOME/.xwin}"
+# Libraries some MSVC objects name in other cases than the SDK's files (tzdb.obj: "Advapi32").
+C="$X/case-libs"
+[ -e "$C/Advapi32.lib" ] || { mkdir -p "$C" && ln -sf "$X/sdk/lib/um/x86_64/advapi32.lib" "$C/Advapi32.lib"; }
+exec lld-link /libpath:"$X/crt/lib/x86_64" /libpath:"$X/sdk/lib/um/x86_64" /libpath:"$X/sdk/lib/ucrt/x86_64" /libpath:"$C" "$@"

@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.25)
+project(Fry3DX VERSION 0.5.0 LANGUAGES C CXX)
 if(UNIX AND NOT APPLE)
   add_link_options(-rdynamic) # function names in crash reports
 endif()
-project(Fry3DX VERSION 0.1.0 LANGUAGES C CXX)
+# FRY_PORTABLE: a Linux build to hand out (runs on any distro as new as the one it's built on):
+# SDL and the C++ library inside the program.
+option(FRY_PORTABLE "Build SDL in and link the C++ runtime statically" OFF)
+if(FRY_PORTABLE AND UNIX AND NOT APPLE AND NOT ANDROID)
+  add_link_options(-static-libstdc++ -static-libgcc)
+endif()
 
-# Fry3DX — Frying 3D Extreme: a 3D modelling app that's easy to pick up. Built on its own
-# engine's window, renderer and UI (engine/).
+# Fry3DX — Frying 3D Extreme: a 3D modelling app that's easy to pick up. Its engine (engine/):
+# window, renderer and UI.
 
 find_program(FRY_CCACHE ccache)
 if(FRY_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
@@ -29,12 +35,12 @@ include(cmake/Shaders.cmake)
 add_subdirectory(engine)
 add_subdirectory(src)
 
-# Content next to the program: bin/keel/ (the engine's: fonts, sky, config); bin/Fry3DX/ (the app's own, none yet).
+# Content next to the program: bin/engine/ (the engine's: fonts, sky, config); bin/Fry3DX/ (the app's own, none yet).
 add_custom_target(content ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/content ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/keel/fonts ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Fry3DX
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/engine/fonts ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Fry3DX
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dejavu_SOURCE_DIR}/ttf/DejaVuSans.ttf ${dejavu_SOURCE_DIR}/ttf/DejaVuSans-Bold.ttf
-          ${dejavu_SOURCE_DIR}/LICENSE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/keel/fonts/
+          ${dejavu_SOURCE_DIR}/LICENSE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/engine/fonts/
   COMMENT "Copying content" VERBATIM)
 
 enable_testing()

@@ -7,7 +7,8 @@ window.FRY = {
   authorUrl: "https://github.com/Nexoniarz",
   repo: "https://github.com/Nexoniarz/Fry3DX",
   tagline: "A 3D modeller that does what you'd expect.",
-  intro: "Pick a tool, click, drag. Plain words instead of jargon, a toolbox like GIMP's, and the useful stuff from the big modellers without the hundred menus around it.",
+  intro: "Pick a tool, click, drag. Plain words instead of jargon, a toolbox like GIMP's, and the useful stuff from the big modellers without the hundred menus around it. On Windows, Linux and your phone.",
+  releases: "https://github.com/Nexoniarz/Fry3DX/releases/latest",
 
   why: {
     title: "Why does this exist?",
@@ -29,6 +30,7 @@ window.FRY = {
     { icon: "⎙", title: "Made for 3D printing", text: "Your printer's plate in the view, sizes in millimetres, checks for holes and flipped faces with fix buttons, overhangs shown red, weight and filament." },
     { icon: "☀", title: "See it rendered", text: "Solid view for modelling, a real renderer with sky, sun and soft shadows when you want to see it properly. Save a picture with F12." },
     { icon: "🗀", title: "Folders and groups", text: "Layers with folders inside folders, drag and drop, show/hide and lock whole groups, and a button on every row that brings the camera to it." },
+    { icon: "📱", title: "On your phone too", text: "Not a viewer: the whole modeller. Big buttons, one finger turns the view, two move and pinch to zoom, holding still is a right-click. Files through the phone's own picker." },
     { icon: "💾", title: "Never lose work", text: "Its own packed .fry file, autosave in the background, recovery after a crash, and a Save / Don't save / Cancel when closing." },
   ],
 
@@ -36,6 +38,7 @@ window.FRY = {
     { img: "img/model.webp", title: "Model", text: "Starter models, a folder of parts, a shape drawn onto a cube's face, rendered with sky and shadows." },
     { img: "img/paint.webp", title: "Paint", text: "A picture pasted on as a sticker: it bends over the cube's edge like a real one." },
     { img: "img/print.webp", title: "Print", text: "The printer's plate, sizes in millimetres, checks and overhangs before you slice." },
+    { img: "img/phone.webp", title: "Phone", text: "The phone layout: big buttons along the bottom, panels when you want them, fingers for the view." },
     { img: "img/combine.webp", title: "Combine", text: "A cylinder taken out of a cube, copies in a row in a folder, a plane made thick." },
     { img: "img/crash.webp", title: "Even the crash screen", text: "If something does get burnt, your work comes back from the last autosave." },
   ],
@@ -58,18 +61,25 @@ window.FRY = {
     ["F1", "Every key, in the app"],
   ],
 
+  downloads: [
+    { os: "Windows", what: "10 and 11, 64-bit", file: "windows-x64.zip", how: "Unpack it, run fry3dx.exe." },
+    { os: "Linux", what: "any distro from 2022 on, 64-bit", file: "linux-x64.AppImage", how: "Make it executable, run it. A .tar.gz is there too." },
+    { os: "Android", what: "8.0 and newer, 64-bit, Vulkan", file: "android-arm64.apk", how: "Open it on the phone to install (allow installing from your browser or files app)." },
+  ],
+
   build: {
-    text: "Fry3DX builds from source on Linux with CMake. Everything else it needs is downloaded while building. On NixOS, shell.nix has the tools.",
+    text: "Or build it from source with CMake: everything else it needs is downloaded while building. On NixOS, shell.nix has the tools.",
     steps: [
       "git clone https://github.com/Nexoniarz/Fry3DX.git",
       "cd Fry3DX",
-      "nix-shell --run 'cmake --preset release && cmake --build build/release'",
+      "cmake --preset release && cmake --build build/release",
       "build/release/bin/fry3dx",
     ],
-    needs: "Needs: a Vulkan graphics card, CMake, Ninja, a C++20 compiler, glslc (shaderc) and SDL3.",
+    needs: "Needs: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+) and glslc. Presets for Windows (cross-built) and Android are in the README.",
   },
 
   versions: [
+    { v: "0.5", date: "2026-10-19", items: ["Builds for Windows, Linux (AppImage) and Android", "A phone layout: big buttons, finger gestures, the phone's file picker", "Apache License 2.0"] },
     { v: "0.4", date: "2026-10-19", items: ["Combine objects: add, subtract, overlap", "Draw shapes onto other objects", "Copies in a row or circle, thicken and hollow", "FBX export", "Folders and groups in Layers, go-to buttons", "Shift scales both sides, Shift+click loops and rings", "A crash screen of its own"] },
     { v: "0.3", date: "2026-10-19", items: ["Stickers that bend over edges, picture layers", "Packed .fry files, autosave and recovery", "Layout tab, Print tab, 3MF / STL / OBJ / PLY / GLB export", "Hole tool: hexagon nut pockets, rectangles, outlines"] },
     { v: "0.1", date: "2026-10-19", items: ["First version: shapes, shape editing, knife, painting, rendering"] },

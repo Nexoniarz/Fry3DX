@@ -1,0 +1,14 @@
+#!/bin/sh
+# clang-cl with the MSVC CRT + Windows SDK from xwin, for every project in the build (sub-builds
+# replaces CMake's flags, so they can't live there). LIB is read by lld-link when clang-cl links.
+# Headers are made case-insensitive through a VFS overlay (made once, next to the SDK).
+X="${XWIN_DIR:-$HOME/.xwin}"
+O="$X/case-overlay.json"
+[ -f "$O" ] || python3 "$(dirname "$0")/make-case-overlay.py" "$X" "$O"
+# clang's own headers (stddef.h's offsetof, intrinsics) must come before the CRT's.
+R="${KEEL_CLANG_INCLUDE:-$(clang-cl -print-resource-dir)/include}"
+export LIB="$X/crt/lib/x86_64;$X/sdk/lib/um/x86_64;$X/sdk/lib/ucrt/x86_64"
+export LIB="$LIB;$X/case-libs"
+exec clang-cl --target=x86_64-pc-windows-msvc -fms-compatibility-version=19.40 -fuse-ld=lld-link -D_CRT_USE_BUILTIN_OFFSETOF -Xclang -ivfsoverlay -Xclang "$O" \
+  /imsvc"$R" /imsvc"$X/crt/include" /imsvc"$X/sdk/include/ucrt" /imsvc"$X/sdk/include/um" /imsvc"$X/sdk/include/shared" /imsvc"$X/sdk/include/winrt" \
+  "$@"

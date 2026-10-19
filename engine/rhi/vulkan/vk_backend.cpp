@@ -1,5 +1,6 @@
 // The Vulkan 1.3 backend: bindless textures (one descriptor array), buffer device addresses
 // for every per-draw and per-frame buffer (passed in push constants), dynamic rendering.
+#include "ui/ui.h"
 #include "render/backend.h"
 #include "render/screenshot.h"
 #include "rhi/vulkan/vk_device.h"
@@ -398,6 +399,7 @@ public:
     void beginUi() override {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        ui::applyPixelScale();
         ImGui::NewFrame();
     }
     void setVsync(bool on) override { device_.setVsync(on); }

@@ -3,6 +3,7 @@
 #include "fs/vfs.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cstring>
@@ -94,6 +95,29 @@ ImFont* font(Font f) {
 }
 
 float scale() { return g_scale; }
+
+namespace {
+float g_pixelScale = 1.0f;
+ImU32 g_lastScaledEvent = 0;
+}
+void setPixelScale(float k) { g_pixelScale = std::clamp(k, 0.5f, 6.0f); }
+float pixelScale() { return g_pixelScale; }
+void applyPixelScale() {
+    const float k = g_pixelScale;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize.x /= k, io.DisplaySize.y /= k; // (set again each frame by the platform)
+    io.DisplayFramebufferScale.x *= k, io.DisplayFramebufferScale.y *= k;
+    // The mouse's positions queued since last frame, in the screen's pixels: into the UI's.
+    // (Events left over for the next frame were done already: by their number.)
+    ImU32 last = g_lastScaledEvent;
+    for (ImGuiInputEvent& e : GImGui->InputEventsQueue) {
+        if (e.EventId <= g_lastScaledEvent) continue;
+        last = std::max(last, e.EventId);
+        if (e.Type == ImGuiInputEventType_MousePos && e.MousePos.PosX > -FLT_MAX)
+            e.MousePos.PosX /= k, e.MousePos.PosY /= k;
+    }
+    g_lastScaledEvent = last;
+}
 
 void beginFrame(float windowHeight) {
     g_scale = std::clamp(windowHeight / 1080.0f, 0.75f, 2.5f);

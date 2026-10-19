@@ -82,6 +82,11 @@ section:last-child { border-bottom: 0; }
 .keys td:first-child { width: 45%; }
 kbd { font: .85rem ui-monospace, "DejaVu Sans Mono", monospace; background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 2px 7px; }
 
+.downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 28px; }
+.download { display: flex; flex-direction: column; gap: 4px; padding: 18px 20px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--line); color: var(--ink); }
+.download:hover { text-decoration: none; border-color: var(--hot); }
+.download strong { font-size: 1.15rem; color: var(--hot); }
+.download .file { font: .85rem ui-monospace, "DejaVu Sans Mono", monospace; color: #cfcdc7; }
 .code { position: relative; background: #0f0f11; border: 1px solid var(--line); border-left: 3px solid var(--hot); border-radius: var(--radius); }
 .code pre { margin: 0; padding: 18px 20px; overflow-x: auto; font: .92rem/1.7 ui-monospace, "DejaVu Sans Mono", monospace; color: #d6d4cd; }
 .copy { position: absolute; top: 10px; right: 10px; font: inherit; font-size: .85rem; color: var(--ink); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; }

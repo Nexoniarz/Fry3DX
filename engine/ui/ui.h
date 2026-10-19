@@ -18,6 +18,12 @@ ImFont* font(Font f);
 // Sizes in pixels; scaled with the window height so 1080p looks like Source at 1080p.
 float scale();
 void beginFrame(float windowHeight);
+// The UI laid out `k` times smaller than the screen's pixels and drawn scaled up, everything
+// alike (a phone: its pixels are tiny). 1: as it is.
+void setPixelScale(float k);
+float pixelScale();
+// The backends call this between the platform's NewFrame and ImGui::NewFrame.
+void applyPixelScale();
 
 // The highlight colour: highlights, the logo.
 inline constexpr uint8_t kAccent[3] = {227, 34, 45};

@@ -312,13 +312,7 @@ int runClient(Game& game) {
             window.setIcon(px, w, h);
             stbi_image_free(px);
         }
-    } else if (auto data = fs::read("branding/keel_emblem.yapf"))
-        if (yapf_texture_t* tex = yapf_tex_load_memory(data->data(), data->size(), 0, 1, nullptr)) {
-            std::vector<uint8_t> rgba(size_t(tex->width) * tex->height * 4);
-            if (yapf_tex_to_rgba8(tex, yapf_tex_surface(tex, 0, 0, 0, 0), 0, rgba.data()) == YAPF_OK)
-                window.setIcon(rgba.data(), int(tex->width), int(tex->height));
-            yapf_tex_free(tex);
-        }
+    }
     if (!g_testMode) audio::init();
     ui::init();
     log::info("Press ` (tilde key) to open the console");
@@ -539,17 +533,16 @@ int run(Game& game, int argc, char** argv) {
         crash::install(g_prefPath, args, dog);
     }
 
-    // Content: the engine's own (<exe dir>/keel/), then the game's (<exe dir>/<game>/) over it,
+    // Content: the engine's own (<exe dir>/engine/), then the game's (<exe dir>/<game>/) over it,
     // each with its packs — like Source's hl2/ under a mod.
 #if defined(__ANDROID__)
     const std::string exeDir = unpackAndroidContent();
-    if (const char* cache = SDL_GetAndroidCachePath()) setenv("TMPDIR", cache, 1); // temp files (script modules) go there
-    const bool firstRun = !std::filesystem::exists(g_configPath);
+    if (const char* cache = SDL_GetAndroidCachePath()) setenv("TMPDIR", cache, 1); // temp files go there
 #else
     const char* base = SDL_GetBasePath();
     const std::string exeDir = base ? base : "./";
 #endif
-    if (!fs::mountGameDir(exeDir + "keel")) log::warn("Engine folder {}keel not found; fonts and UI won't load", exeDir);
+    if (!fs::mountGameDir(exeDir + "engine")) log::warn("Engine folder {}engine not found; fonts and UI won't load", exeDir);
     const std::string gameDir = exeDir + game.name();
     if (!fs::mountGameDir(gameDir)) log::warn("Game folder {} not found; no content will load", gameDir);
 
@@ -558,9 +551,6 @@ int run(Game& game, int argc, char** argv) {
     // Like Source's config_default.cfg: default binds/settings, then the player's own.
     if (!g_dedicated && fs::exists("cfg/default.cfg")) execute("exec default.cfg");
     if (std::filesystem::exists(g_configPath)) execute("exec \"" + g_configPath + "\"");
-#if defined(__ANDROID__)
-    if (firstRun) execute("preset Low"); // a phone: start light (the options change it)
-#endif
     if (fs::exists("cfg/autoexec.cfg")) execute("exec autoexec.cfg");
     executeCommandLine(startup, 0);
     g_modsDir = exeDir + "mods/" + game.name();

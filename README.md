@@ -1,7 +1,14 @@
-# Fry3DX — Frying 3D Extreme
+<p align="center"><img src="branding/logo.png" width="96" alt=""></p>
 
-**A 3D modeller that does what you'd expect: pick a tool, click, drag.**
-Made by [Nexoniarz](https://github.com/Nexoniarz) · Website: https://nexoniarz.github.io/Fry3DX/
+<h1 align="center">Fry3DX</h1>
+<p align="center"><b>Frying 3D Extreme — a 3D modeller that does what you'd expect.</b><br>
+Pick a tool, click, drag. On Windows, Linux and your phone.</p>
+<p align="center">
+  <a href="https://nexoniarz.github.io/Fry3DX/">Website</a> ·
+  <a href="https://github.com/Nexoniarz/Fry3DX/releases">Download</a> ·
+  <a href="#build-it-yourself">Build it</a> ·
+  made by <a href="https://github.com/Nexoniarz">Nexoniarz</a>
+</p>
 
 ![Fry3DX](docs/img/model.webp)
 
@@ -12,100 +19,122 @@ guess, modes inside modes. Fry3DX is built the way people think — a toolbox li
 words on every button, tooltips everywhere — and keeps the useful parts (rounding, mirroring,
 combining, holes for screws, checks for 3D printing) one click away.
 
-## Build and run
+And it works on a phone. Not a viewer: the whole modeller, with big buttons and fingers.
 
-Linux, a Vulkan graphics card, CMake, Ninja, a C++20 compiler, glslc (shaderc) and SDL3.
-Everything else is downloaded while building. On NixOS `shell.nix` has it all:
+## Download
 
-    git clone https://github.com/Nexoniarz/Fry3DX.git && cd Fry3DX
-    nix-shell --run 'cmake --preset release && cmake --build build/release'
-    build/release/bin/fry3dx [file.fry]
-    nix-shell --run 'cmake --build build/debug --target check'   # tests
+From [Releases](https://github.com/Nexoniarz/Fry3DX/releases):
 
-## What's in it (v0.4)
+| | |
+|---|---|
+| **Windows** (10 and 11, x64) | `Fry3DX-…-windows-x64.zip`: unpack, run `fry3dx.exe` |
+| **Linux** (any distro from 2022 on, x64) | `Fry3DX-…-linux-x64.AppImage`: make it executable, run it. Or the `.tar.gz` |
+| **Android** (8.0 and newer, 64-bit, Vulkan) | `Fry3DX-…-android-arm64.apk`: open it on the phone to install |
 
-Five tabs at the top (Ctrl+1 to 5): **Model**, **Paint**, **Layout**, **Render**, **Print**.
+Needs a graphics card (or phone) with Vulkan; on a PC, OpenGL 4.6 works too.
 
-- **Knife** (K, shape editing): click points along the cut (or drag a straight line; Ctrl for
-  45° steps), Enter or double-click cuts. Only what you see, or **right through**; then just the
-  edges, pieces of one object, each piece its own object, or the smaller piece deleted — the
-  inside **filled** (solid) or **left open** (hollow).
-- **Hole** (O): press on a face, drag out the size (or type it in mm): round (any number of
-  sides, screw sizes M2-M8 ready), rectangle (width and height), triangle, or hexagon (nut sizes
-  M2-M8 ready, with a little room added for prints), turned as you like. All the way through, a
-  pocket of a set depth, or **only the outline**: cut into the face as a new face, picked, ready
-  to Extrude, Bevel or paint. Round edges then rounds its rim too.
-- **Paint tab**: paint straight on the model (brush, eraser, fill, pick colour) or on its flat
-  picture beside it; the surface is laid out flat by itself. **Paste a picture** (Ctrl+V, copied
-  in GIMP or anywhere) or add one from a file, then drag its four corners to stretch and bend it
-  into place — you see it on the model as you go — and Enter places it. Pictures save beside the
-  .fry and go with the glTF export.
-- **Pictures as layers**: a pasted picture goes onto the model as a **sticker** — drag it round
-  the model and over a corner or edge it bends onto the next face like a real one; its corners
-  size it (Shift stretches), the round handle turns it. Or put it on the flat picture and drag its
-  corners. **Enter locks** it as a layer (listed in Properties: hide, reorder, delete, paint in for
-  good); **clicking it in the Picture panel unlocks it** to move it again.
-- **Files**: `.fry` is Fry3DX's own file — one file with the pictures and layers inside, packed
-  small (pictures as colour planes of predicted differences, then zstd). Old text `.fry` files
-  still open. **Autosave** (File > Autosave, every 2 minutes by default) keeps a highly packed
-  copy in the background; after a crash it offers it back. Closing, New or Open with changes asks:
-  **Save / Don't save / Cancel**.
-- **Print tab** (Ctrl+5): your printer's plate drawn in the view (Prusa, Bambu, Creality,
-  Elegoo, Anycubic, or your own size), the size in millimetres (type one in: it keeps its shape),
-  fits or not, checks (holes, faces inside out, edges with more than two faces, faces with no
-  size) with buttons that fix them, overhangs shown red, weight and filament from the material
-  and infill, Measure (M), Lay flat on a face (L), Put on the bed (B), save 3MF / STL.
-- **Object menu**: **add objects together, take one out of another, or keep only where they
-  overlap** (the last picked is kept; Ctrl+Shift+ / Ctrl+Shift-), always closed and printable;
-  **make copies** in a row or round in a circle (as objects or joined into one); **make it
-  thick** (a surface gets a back, a closed shape goes hollow); join flat faces side by side.
-- **Layers panel**: **folders** (+ Folder, or Ctrl+G groups the picked ones; folders inside
-  folders; drag things onto them; a folder's eye and lock work on all in it; click it to pick all
-  of it), a **go-to button** at the end of every row bringing the camera to it, right-click for
-  rename, duplicate, show only this, move to a folder, delete.
-- **Export** (Ctrl+E): GLB, glTF, **FBX** (Blender, Unity, Unreal, Maya; pictures inside), OBJ (+MTL), 3MF, STL (millimetres, for printing), PLY; painted
-  pictures and their layers go with it.
- the sun (round, up, strength, colour), sky or a plain background, ground,
-  brightness, soft shadows, shade in corners, glow, colour; Save a picture (F12) saves just the
-  view, without panels or gizmos.
+## What it does
 
+Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print** (Ctrl+1 to 5).
 
-- **Toolbox like GIMP's**: picture buttons (hover for name and key), and *Tool options* under it.
-- **Solid view** for modelling (plain grey room, studio light) and **Rendered** (real sky,
-  sun and shadows) — Z switches; Shift+Z wireframe; Alt+Z X-ray.
-- **Shapes with settings you can change after adding** (+ in the toolbox, or Add): cube, rounded
-  cube, plane, circle, cylinder, tube, cone, pyramid, sphere, capsule, torus, wedge, stairs, arch;
-  **starter models**: table, chair, shelf, barrel, bottle, pillar, door frame, crate.
-- **Draw shape** (D): click an outline on the ground, a side view's plane, or **straight on any
-  face of another object** → a new solid standing on it, added to it (raised), or cut into it.
-- Move / Rotate / Scale (W/E/R): gizmos turn with the object (or the world's way, or — editing a
-  shape — out of the faces). Scale has a handle on each side; by default the other side stays put
-  (or the middle, the bottom, the origin); Shift scales both sides at once. Ctrl snaps.
-- **Round, smooth, mirror** on any object, changeable any time: round every sharp edge, smooth it
-  out like clay (keeping sharp edges if you want), mirror across X/Y/Z. Bake them when you like.
-- **Shape editing** (Tab or double-click): points / edges / faces (1/2/3); extrude (X), inset (I),
-  round edges (B), loop cut (C), cut in four, smooth, merge (M), make face, flip, separate (P).
-- **Selecting**: click, box, brush or lasso; Shift+click (or Alt+click, double-click) a whole loop,
-  Shift+Ctrl+click an edge for the ring across it, Ctrl+click adds or takes one; more/less,
-  joined (L), invert, all/none.
-- Join objects (Ctrl+J), reference pictures to trace over, layers (show, lock, rename).
-- Undo / redo, `.fry` files, **export to glTF** (Ctrl+E), save a picture of the view (F12).
-- F1 lists every key. If it ever crashes, its own crash screen offers to open it again, with the
-  last autosave offered back.
+**Making shapes**
+- **Shapes that stay editable**: cube, rounded cube, plane, circle, cylinder, tube, cone, pyramid,
+  sphere, capsule, torus, wedge, stairs, arch, and starter models (table, chair, shelf, barrel,
+  bottle, pillar, door frame, crate). Their sizes stay changeable in Properties.
+- **Draw shape** (D): click an outline on the ground, on a side view's plane, or straight on any
+  face of another object: a new part standing on it, added to it, or cut into it.
+- **Move, turn, scale** (W, E, R): the arrows turn with the object. Scale keeps the other side
+  where it is; Shift scales both sides at once. Ctrl snaps.
+- **Round, smooth, mirror** any object, changeable any time, baked in when you like.
+
+**Editing the shape** (Tab, or double-click)
+- Points, edges, faces (1, 2, 3). Extrude (X), inset (I), round edges (B), loop cut (C), knife (K),
+  cut in four, smooth, merge (M), make a face, flip, separate (P).
+- **Hole** (O): round (M2–M8 screw sizes ready), rectangle, triangle or hexagon (M2–M8 nut
+  sizes, with room for prints); all the way through, a pocket, or only its outline as a new face.
+- **Selecting**: click, box, brush or lasso. Shift+click a whole loop, Shift+Ctrl+click an
+  edge's ring, Ctrl+click adds or takes one.
+
+**Whole objects** (the Object menu)
+- **Add together, take one out of another, keep only where they overlap**: always closed, so
+  always printable (Ctrl+Shift+ and Ctrl+Shift−).
+- **Copies** in a row or round a circle; **make it thick** (a surface gets a back, a solid goes
+  hollow); join objects; join flat faces.
+- **Layers** with folders inside folders, drag and drop, hide and lock whole groups, and a button
+  on every row that brings the camera to it.
+
+**Painting**
+- Paint on the model or on its flat picture. **Paste any picture** (Ctrl+V): it goes on like a
+  sticker that bends over edges and corners; Enter locks it as a layer, clicking it in the
+  Picture panel unlocks it again.
+- **Layout tab**: move, turn and size the flat frames of the surface yourself; the paint follows.
+
+**Seeing it**
+- **Solid** view for modelling, **Rendered** with a real sky, sun and soft shadows (Z). Wireframe
+  (Shift+Z), X-ray (Alt+Z). The Render tab: the sun, sky, ground, brightness, shadows, glow;
+  F12 saves a picture of just the view.
+
+**3D printing** (the Print tab)
+- Your printer's plate in the view (Prusa, Bambu, Creality, Elegoo, Anycubic, or your own),
+  sizes in millimetres, checks for holes and flipped faces with buttons that fix them, overhangs
+  in red, weight and filament, measuring, lay flat on a face, save 3MF or STL.
+
+**Files**
+- `.fry`: Fry3DX's own file, everything in one, packed small. **Autosave** in the background,
+  offered back after a crash; Save / Don't save / Cancel when closing.
+- **Export**: GLB, glTF, FBX (Blender, Unity, Unreal, Maya), OBJ, 3MF, STL, PLY.
+
+**On a phone or tablet**: everything bigger, the side panels when you want them, a bar of big
+buttons (undo, redo, Shift and Ctrl that stay down, edit the shape, delete, frame). One finger
+turns the view (or drags the arrows), two fingers move it and pinch to zoom, holding a finger
+still is a right-click. Files open and save through the phone's own file picker.
+
+F1 in the app lists every key.
+
+## Build it yourself
+
+Everything it uses is downloaded while building; you need CMake 3.25+, Ninja, a C++20 compiler
+(GCC 13+, Clang 17+ or clang-cl) and glslc (from shaderc or the Vulkan SDK). On NixOS,
+`shell.nix` has it all.
+
+```sh
+git clone https://github.com/Nexoniarz/Fry3DX.git && cd Fry3DX
+cmake --preset release && cmake --build build/release      # (NixOS: inside nix-shell)
+build/release/bin/fry3dx [file.fry]
+cmake --build build/debug --target check                     # the tests (after --preset debug)
+```
+
+| Preset | What |
+|---|---|
+| `debug`, `release` | for working on it |
+| `portable` | a Linux build to hand out: SDL and the C++ library inside the program |
+| `windows` | Windows, cross-built from Linux with clang-cl ([how](cmake/toolchains/windows-msvc.cmake)) |
+| `android` | the Android library; `android/build_apk.py` makes the APK ([how](android/build_apk.py)) |
+
+`tools/package.py` packs builds into the downloads (zip, tar.gz, AppImage). Pushing a tag
+`v*` makes GitHub build all of them and put them in a release (`.github/workflows/build.yml`).
+
+## What's where
+
+| | |
+|---|---|
+| `src/app.cpp` | the app: panels, tools, the view, touch |
+| `src/mesh.*`, `tools.cpp`, `cut.cpp` | polygon meshes and the edits on them (tested without a window) |
+| `src/boolean.cpp`, `modify.cpp` | combining shapes, thickness, joining flat faces |
+| `src/shapes.*` | the shape library and starter models |
+| `src/scene.*`, `package.cpp` | objects, folders, the `.fry` file |
+| `src/export.cpp`, `print.cpp` | GLB/glTF/FBX/OBJ/3MF/STL/PLY, checks for printing |
+| `src/uv.cpp`, `sticker.cpp`, `image.cpp` | flat layouts, stickers, pictures |
+| `engine/` | window, Vulkan/OpenGL renderer, UI, files |
+| `android/`, `tools/`, `.github/` | builds and packages |
+| `docs/` | the website (GitHub Pages); its words are all in `docs/content.js` |
+| `tests/` | `mesh_test` |
 
 ## Coming
 
-Sculpting, materials (metal/rough shown in the view), scripting; animation later.
+Sculpting, materials shown in the view, scripting; animation later.
 
-## Layout
+## Licence
 
-- `engine/` — Fry3DX's engine: window, Vulkan/OpenGL renderer, UI, files.
-- `src/mesh.*`, `src/tools.cpp` — polygon meshes and the edits on them (no window needed; tested).
-- `src/shapes.*` — the shape library and starter models.
-- `src/icons.*` — the toolbox pictures.
-- `branding/` — the logo (SVG, and PNGs made from it with Inkscape).
-- `src/scene.*` — objects, folders, `.fry` text; `src/package.cpp` the packed `.fry`.
-- `src/export.cpp` — GLB/glTF/FBX/OBJ/3MF/STL/PLY; `src/print.cpp` — print checks.
-- `src/boolean.cpp`, `src/modify.cpp` — combining shapes, thickness, joining flat faces.
-- `docs/` — the website (GitHub Pages). Its text is all in `docs/content.js`.
-- `src/app.cpp` — the app.
+[Apache License 2.0](LICENSE). Copyright 2026 Nexoniarz.
+Sky pictures: Poly Haven, CC0. DejaVu fonts: their own free licence (`engine/fonts/LICENSE` in builds).

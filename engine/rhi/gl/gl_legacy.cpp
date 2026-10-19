@@ -6,6 +6,7 @@
 //   3.1  lightmaps, sun with shadows (one tap), sky, fog; flat surfaces, no highlights or lights
 // Neither has clustered lights, light shadows or occlusion culling. Depth is GL's -1..1 here
 // (no glClipControl), so vertex shaders turn the 0..1 matrices' z into it.
+#include "ui/ui.h"
 #include "render/backend.h"
 #include "core/log.h"
 #include "platform/window.h"
@@ -480,6 +481,7 @@ public:
     void beginUi() override {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        ui::applyPixelScale();
         ImGui::NewFrame();
     }
     void setVsync(bool on) override { SDL_GL_SetSwapInterval(on ? 1 : 0); }

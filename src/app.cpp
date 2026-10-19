@@ -9,12 +9,16 @@
 #include "shapes.h"
 
 #include <SDL3/SDL.h>
+#if defined(__ANDROID__)
+#include <SDL3/SDL_main.h> // (main becomes the SDL_main SDL's Java side calls)
+#endif
 #include <core/cvar.h>
 #include <core/log.h>
 #include <engine.h>
 #include <fs/vfs.h>
 #include <render/renderer.h>
 #include <render/screenshot.h>
+#include <ui/ui.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -218,6 +222,13 @@ keel::Cvar fry_printer("fry_printer", "0", keel::CVAR_ARCHIVE, "Fry3DX: the 3D p
 keel::Cvar fry_bed_x("fry_bed_x", "220", keel::CVAR_ARCHIVE, "Fry3DX: your own printer's build plate across (mm)");
 keel::Cvar fry_bed_y("fry_bed_y", "220", keel::CVAR_ARCHIVE, "Fry3DX: your own printer's build plate deep (mm)");
 keel::Cvar fry_bed_z("fry_bed_z", "250", keel::CVAR_ARCHIVE, "Fry3DX: how high your own printer prints (mm)");
+#if defined(__ANDROID__)
+keel::Cvar fry_touch("fry_touch", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout and touch (takes effect on the next start)");
+#else
+keel::Cvar fry_touch("fry_touch", "0", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout and touch (takes effect on the next start)");
+#endif
+keel::Cvar fry_uiscale("fry_uiscale", "0", 0, "Fry3DX: draw the UI this many times bigger (0: by the screen)");
+keel::Cvar fry_uisize("fry_uisize", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout's size, times");
 keel::Cvar fry_autosave("fry_autosave", "2", keel::CVAR_ARCHIVE, "Fry3DX: autosave every this many minutes while there are changes (0: off)");
 
 class App : public keel::Game {
@@ -341,6 +352,7 @@ public:
             self->groupSelected();
             if (a.size() > 1 && !self->scene_.folders.empty()) self->scene_.folders.back().name = a[1], self->renamingFolder_ = 0;
         }, "Fry3DX: fry_group [name]: the picked into a new folder");
+        static keel::Cmd panelsCmd("fry_panels", [](const keel::Args&) { self->panelsOpen_ = !self->panelsOpen_; }, "Fry3DX: phone layout: show / hide the panels");
         static keel::Cmd goCmd("fry_goto", [](const keel::Args&) { self->goTo(self->selected_); }, "Fry3DX: the camera to the picked");
         static keel::Cmd drawCmd("fry_draw", [](const keel::Args& a) { // fry_draw mode thick x y x y x y ... (view 0..1)
             if (a.size() < 9) return;
@@ -497,6 +509,7 @@ public:
         applyShading();
         takeDialogResult();
         ImGuiIO& io = ImGui::GetIO();
+        if (touch()) touchFrame(io);
         const ImGuiID dock = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         if (!layoutDone_) defaultLayout(dock);
         if (ImGuiDockNode* c = ImGui::DockBuilderGetCentralNode(dock)) viewMin_ = c->Pos, viewMax_ = ImVec2(c->Pos.x + c->Size.x, c->Pos.y + c->Size.y);
@@ -504,11 +517,14 @@ public:
         menuBar();
         toolbox();
         toolOptions();
-        layersPanel();
-        propertiesPanel();
-        if (tab_ == Tab::Paint || tab_ == Tab::Layout) picturePanel();
-        statusBar();
-        if (!capturing()) viewButtons();
+        if (!touch() || panelsOpen_) {
+            layersPanel();
+            propertiesPanel();
+            if (tab_ == Tab::Paint || tab_ == Tab::Layout) picturePanel();
+        }
+        if (!touch()) statusBar();
+        if (!capturing() && (!touch() || viewsOpen_)) viewButtons();
+        if (!capturing() && touch()) touchBar();
         if (showHelp_) helpWindow();
         if (showAbout_) aboutWindow();
         copiesWindow();
@@ -644,6 +660,15 @@ private:
     } ledit_;
     bool pasteOnSurface_ = true;
     uint32_t renamingFolder_ = 0;
+    // Touch (set when it starts: fry_touch).
+    bool touchMode_ = false, panelsOpen_ = false, viewsOpen_ = false, shiftLatch_ = false, ctrlLatch_ = false, touchOrbit_ = false;
+    struct Gesture {
+        bool two = false, longDone = false, rightUp = false;
+        ImVec2 mid{}, downPos{};
+        float spread = 1;
+        double downAt = -1;
+    } gest_;
+    std::string captureUri_; // (a picture of the view going into a picked file)
     struct CopiesSetting {
         int count = 3, axis = 2;
         bool round = false, joined = false;
@@ -899,8 +924,46 @@ private:
 
     // ───────────────────────────── files ─────────────────────────────
 
-    void openFile(const std::string& path) {
+    // ── Files a phone's file picker gives (content://...): read and written through SDL ──
+    static bool isUri(const std::string& p) { return p.starts_with("content://"); }
+    // A file's name as shown (a picked file's: from the end of its address, decoded).
+    static std::string fileName(const std::string& p) {
+        if (!isUri(p)) return stdfs::path(p).filename().string();
+        std::string d;
+        for (size_t i = 0; i < p.size(); ++i)
+            if (p[i] == '%' && i + 2 < p.size()) d += char(std::stoi(p.substr(i + 1, 2), nullptr, 16)), i += 2;
+            else d += p[i];
+        return d.substr(d.find_last_of("/:") + 1);
+    }
+    // A picked file copied to a file of our own to read ("" if it couldn't be).
+    static std::string fromUri(const std::string& uri, const std::string& name) {
+        size_t n = 0;
+        void* data = SDL_LoadFile(uri.c_str(), &n);
+        if (!data) return "";
+        std::error_code ec;
+        const std::string local = (stdfs::temp_directory_path(ec) / name).string();
+        std::ofstream(local, std::ios::binary).write(static_cast<const char*>(data), std::streamsize(n));
+        SDL_free(data);
+        return local;
+    }
+    // A file of ours written into the picked one.
+    static bool toUri(const std::string& local, const std::string& uri) {
+        std::ifstream in(local, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        SDL_IOStream* io = SDL_IOFromFile(uri.c_str(), "wb");
+        if (!io) return false;
+        const bool ok = SDL_WriteIO(io, bytes.data(), bytes.size()) == bytes.size();
+        return SDL_CloseIO(io) && ok;
+    }
+    static std::string tempFile(const std::string& name) {
+        std::error_code ec;
+        return (stdfs::temp_directory_path(ec) / name).string();
+    }
+
+    void openFile(const std::string& picked) {
         std::string err;
+        const std::string path = isUri(picked) ? fromUri(picked, "opened.fry") : picked;
+        if (path.empty()) return say("Couldn't read that file");
         auto s = loadPackage(path, &err);
         if (!s) return say("Couldn't open: " + err);
         dropAutosave();
@@ -919,21 +982,23 @@ private:
             }
             std::erase_if(o.layers, [](const PictureLayer& l) { return !l.image; });
         }
-        path_ = path;
+        path_ = picked;
         undo_.clear(), redo_.clear(), selected_.clear();
         mode_ = Mode::Object, active_ = 0, dirty_ = false, ledit_ = {};
         touchAll();
         frameAll();
-        say("Opened " + stdfs::path(path).filename().string());
+        say("Opened " + fileName(picked));
     }
     bool saveFile(std::string path) {
         if (path.empty()) return false;
-        if (stdfs::path(path).extension() != ".fry") path += ".fry";
+        if (!isUri(path) && stdfs::path(path).extension() != ".fry") path += ".fry";
+        const std::string local = isUri(path) ? tempFile("saving.fry") : path;
         std::string err;
-        if (!savePackage(path, scene_, 12, &err)) return afterSave_ = 0, say("Couldn't save: " + err), false;
+        if (!savePackage(local, scene_, 12, &err)) return afterSave_ = 0, say("Couldn't save: " + err), false;
+        if (isUri(path) && !toUri(local, path)) return afterSave_ = 0, say("Couldn't write the file you picked"), false;
         dropAutosave();
         path_ = path, dirty_ = false;
-        say(std::format("Saved {} ({})", stdfs::path(path).filename().string(), sizeText(stdfs::file_size(path))));
+        say(std::format("Saved {} ({})", fileName(path), sizeText(stdfs::file_size(local))));
         if (const int then = std::exchange(afterSave_, 0)) doAfterAsking(then);
         return true;
     }
@@ -946,8 +1011,16 @@ private:
                                &out, im.w, im.h, 4, im.px.data(), im.w * 4);
         return out;
     }
-    void exportFile(std::string path, int filter = -1) {
+    void exportFile(std::string path, int filter = -1, const std::string& asExt = "") {
         if (path.empty()) return;
+        if (isUri(path)) { // (a picked file: made here, then written into it; one file only)
+            const auto& formats = exportFormats();
+            const std::string ext = !asExt.empty() ? asExt : formats[size_t(filter >= 0 && filter < int(formats.size()) ? filter : 0)].first;
+            const std::string local = tempFile("export" + ext);
+            exportFile(local);
+            if (!toUri(local, path)) say("Couldn't write the file you picked");
+            return;
+        }
         std::string ext = stdfs::path(path).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         const auto& formats = exportFormats();
@@ -979,7 +1052,7 @@ private:
         const ImVec2 c = ImGui::GetMainViewport()->GetCenter();
         ImGui::SetNextWindowPos(c, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         if (!ImGui::BeginPopupModal("Save changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) return;
-        const std::string name = path_.empty() ? "Untitled" : stdfs::path(path_).filename().string();
+        const std::string name = path_.empty() ? "Untitled" : fileName(path_);
         ImGui::Text("%s has changes that aren't saved.", name.c_str());
         ImGui::TextDisabled(askSave_ == 1 ? "Save them before closing?" : askSave_ == 2 ? "Save them before starting a new one?" : "Save them before opening another?");
         ImGui::Spacing();
@@ -1051,9 +1124,18 @@ private:
             std::string from;
             std::getline(in, from);
             std::error_code ec;
-            const auto when = std::chrono::clock_cast<std::chrono::system_clock>(stdfs::last_write_time(f, ec));
-            const std::string label = std::format("{}   {:%Y-%m-%d %H:%M}   {}", from.empty() ? "Untitled" : stdfs::path(from).filename().string(),
-                                                  std::chrono::zoned_time(std::chrono::current_zone(), std::chrono::floor<std::chrono::minutes>(when)), sizeText(stdfs::file_size(f, ec)));
+            // (in local time: through time_t, as not every C++ library has time zones yet)
+            const std::time_t t = std::chrono::system_clock::to_time_t(
+                std::chrono::time_point_cast<std::chrono::system_clock::duration>(stdfs::file_time_type::clock::to_sys(stdfs::last_write_time(f, ec))));
+            std::tm local{};
+#if defined(_WIN32)
+            localtime_s(&local, &t);
+#else
+            localtime_r(&t, &local);
+#endif
+            char when[32];
+            std::strftime(when, sizeof when, "%Y-%m-%d %H:%M", &local);
+            const std::string label = std::format("{}   {}   {}", from.empty() ? "Untitled" : stdfs::path(from).filename().string(), when, sizeText(stdfs::file_size(f, ec)));
             ImGui::PushID(f.c_str());
             if (ImGui::Button("Open", ImVec2(70, 0))) open = f;
             ImGui::SameLine();
@@ -1105,6 +1187,8 @@ private:
         stbi_image_free(px);
         std::error_code ec;
         stdfs::remove(tmp, ec);
+        if (const std::string uri = std::exchange(captureUri_, {}); ok && !uri.empty())
+            return say(toUri(capturePath_, uri) ? "Saved a picture of the view: " + fileName(uri) : "Couldn't write the file you picked");
         say(ok ? "Saved a picture of the view: " + stdfs::path(capturePath_).filename().string() : "Couldn't write " + capturePath_);
     }
     static bool loadImageFile(const std::string& path, Image& out) {
@@ -1146,10 +1230,10 @@ private:
             else self->dialogCancelled_ = true;
         };
         SDL_Window* w = SDL_GetKeyboardFocus();
-        const std::string here = path_.empty() ? std::string() : stdfs::path(path_).parent_path().string();
+        const std::string here = path_.empty() || isUri(path_) ? std::string() : stdfs::path(path_).parent_path().string();
         const char* at = here.empty() ? nullptr : here.c_str();
         if (kind == 1) SDL_ShowOpenFileDialog(done, this, w, fry, 1, at, false);
-        else if (kind == 2) SDL_ShowSaveFileDialog(done, this, w, fry, 1, path_.empty() ? at : path_.c_str());
+        else if (kind == 2) SDL_ShowSaveFileDialog(done, this, w, fry, 1, path_.empty() || isUri(path_) ? at : path_.c_str());
         else if (kind == 3) SDL_ShowSaveFileDialog(done, this, w, models.data(), int(models.size()), at);
         else if (kind == 8 || kind == 9) {
             static const SDL_DialogFileFilter mf[] = {{"3MF for slicers", "3mf"}}, stl[] = {{"STL", "stl"}};
@@ -1167,6 +1251,16 @@ private:
             if (std::exchange(dialogCancelled_, false)) afterSave_ = 0; // (Save, then quit: but the saving was cancelled)
         }
         if (file.empty()) return;
+        if (isUri(file) && (kind == 4 || kind == 6)) file = fromUri(file, std::format("picked-{}.img", SDL_GetTicks())); // (pictures: read from a copy)
+        if (isUri(file) && (kind == 5 || kind == 7)) { // (pictures saved: made here, then written into the picked file)
+            const std::string uri = file;
+            file = tempFile("picture.png");
+            if (kind == 5) return savePicture(file), void(captureUri_ = uri); // (written into it once it's made)
+            if (Object* o = find(active_); o && o->picture) writePng(file, composePicture(*o));
+            say(toUri(file, uri) ? "Saved " + fileName(uri) : "Couldn't write the file you picked");
+            return;
+        }
+        if (isUri(file) && (kind == 8 || kind == 9)) return exportFile(file, -1, kind == 8 ? ".3mf" : ".stl");
         if (kind == 1) openFile(file);
         else if (kind == 2) saveFile(file);
         else if (kind == 3) exportFile(file, filter);
@@ -3115,6 +3209,109 @@ private:
         say(n ? std::format("{} faces joined into the flat ones beside them", n) : "Nothing to join: no flat faces side by side");
     }
 
+    // ───────────────────────────── touch: phones and tablets ─────────────────────────────
+    // A phone: everything drawn bigger, the side panels only when asked for, a bar of big buttons
+    // at the bottom (undo, Shift and Ctrl that stay down, editing the shape...), and fingers:
+    // one drags the view round (or a tool's arrows), two move it and pinch to zoom, holding one
+    // still is a right-click.
+
+    bool touch() const { return touchMode_; }
+    // How much bigger than its pixels the UI is drawn.
+    float touchScale() const {
+        if (fry_uiscale.f() > 0) return fry_uiscale.f();
+        if (!touch()) return 1.0f;
+        const float density = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+        return std::clamp((density > 0 ? density : 2.0f) * 0.9f, 1.0f, 4.0f) * std::clamp(fry_uisize.f(), 0.5f, 2.0f);
+    }
+    void touchFrame(ImGuiIO& io) {
+        if (shiftLatch_) io.KeyShift = true;
+        if (ctrlLatch_) io.KeyCtrl = true;
+        ImGui::GetStyle().FontScaleMain = 1.0f; // (the sizes come from touchScale)
+        if (gest_.rightUp) { // (the long press's right-click: let go the frame after)
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+            gest_.rightUp = false;
+        }
+        // The fingers on the screen now (where, in the UI's units).
+        std::vector<ImVec2> fingers;
+        int devices = 0;
+        if (SDL_TouchID* ids = SDL_GetTouchDevices(&devices)) {
+            for (int d = 0; d < devices; ++d) {
+                int n = 0;
+                if (SDL_Finger** f = SDL_GetTouchFingers(ids[d], &n)) {
+                    for (int i = 0; i < n; ++i) fingers.push_back(ImVec2(f[i]->x * io.DisplaySize.x, f[i]->y * io.DisplaySize.y));
+                    SDL_free(f);
+                }
+            }
+            SDL_free(ids);
+        }
+        auto inView = [&](ImVec2 p) { return p.x >= viewMin_.x && p.y >= viewMin_.y && p.x < viewMax_.x && p.y < viewMax_.y; };
+        if (fingers.size() >= 2) {
+            const ImVec2 mid((fingers[0].x + fingers[1].x) * 0.5f, (fingers[0].y + fingers[1].y) * 0.5f);
+            const float spread = std::max(std::hypot(fingers[0].x - fingers[1].x, fingers[0].y - fingers[1].y), 1.0f);
+            if (!gest_.two && !drag_.active && inView(mid) && !ImGui::IsAnyItemActive()) { // two fingers: the first's tap or drag is off
+                gest_.two = true, gest_.mid = mid, gest_.spread = spread;
+                boxing_ = lassoing_ = touchOrbit_ = false;
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            }
+            if (gest_.two) {
+                panBy(ImVec2(mid.x - gest_.mid.x, mid.y - gest_.mid.y));
+                dist_ = std::clamp(dist_ * gest_.spread / spread, 0.01f, 5000.0f);
+                gest_.mid = mid, gest_.spread = spread;
+            }
+            gest_.downAt = -1;
+            return;
+        }
+        if (fingers.empty()) gest_.two = false;
+        if (fingers.size() != 1 || gest_.two) return void(gest_.downAt = -1);
+        // One finger held still: a right-click there (menus in the panels, orbit in the view).
+        const ImVec2 p = fingers[0];
+        if (gest_.downAt < 0) gest_.downAt = now(), gest_.downPos = p, gest_.longDone = false;
+        if (std::hypot(p.x - gest_.downPos.x, p.y - gest_.downPos.y) > 12) gest_.downAt = now() + 1e9; // (moved: not a long press)
+        if (!gest_.longDone && now() - gest_.downAt > 0.55 && !drag_.active) {
+            gest_.longDone = true;
+            boxing_ = lassoing_ = touchOrbit_ = false;
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            gest_.rightUp = true;
+        }
+    }
+    // The bar along the bottom of the view: big buttons, in rows if the view's narrow.
+    void touchBar() {
+        const float maxW = std::max(viewMax_.x - viewMin_.x - 16, 120.0f);
+        ImGui::SetNextWindowPos(ImVec2((viewMin_.x + viewMax_.x) * 0.5f, viewMax_.y - 6), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.8f);
+        ImGui::Begin("##touchbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking);
+        if (now() - messageAt_ < 4.0) ImGui::PushTextWrapPos(maxW), ImGui::TextColored(kAccentText, "%s", message_.c_str()), ImGui::PopTextWrapPos();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 8));
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float x = 0; // (where the row's got to)
+        auto button = [&](const char* label, bool on = false, const char* tip = nullptr) {
+            const float w = ImGui::CalcTextSize(label).x + st.FramePadding.x * 2;
+            if (x > 0 && x + st.ItemSpacing.x + w <= maxW) ImGui::SameLine(), x += st.ItemSpacing.x;
+            else x = 0;
+            x += w;
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+            const bool pressed = ImGui::Button(label);
+            if (on) ImGui::PopStyleColor();
+            if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            return pressed;
+        };
+        if (button("Undo")) undo();
+        if (button("Redo")) redo();
+        if (button("Shift", shiftLatch_, "Held down until tapped again: adds to the selection, picks loops, scales both sides")) shiftLatch_ = !shiftLatch_;
+        if (button("Ctrl", ctrlLatch_, "Held down until tapped again: takes from the selection, snaps")) ctrlLatch_ = !ctrlLatch_;
+        if (tab_ == Tab::Model) {
+            if (button(mode_ == Mode::Edit ? "Done" : "Edit shape", mode_ == Mode::Edit)) mode_ == Mode::Edit ? leaveEdit() : enterEdit();
+            if (button("Delete")) deleteSelected();
+        }
+        if (button("Frame")) frameSelected();
+        if (button("Views", viewsOpen_)) viewsOpen_ = !viewsOpen_;
+        if (button("Panels", panelsOpen_, "Layers, Properties (and the Picture when painting)")) panelsOpen_ = !panelsOpen_;
+        ImGui::PopStyleVar();
+        ImGui::End();
+    }
+
     // ───────────────────────────── the camera ─────────────────────────────
 
     glm::vec3 viewDir() const { return forwardOf(yaw_, pitch_); }
@@ -3922,8 +4119,11 @@ private:
             return;
         }
         if (boxing_) {
+            const bool moved = std::hypot(io.MousePos.x - boxStart_.x, io.MousePos.y - boxStart_.y) > 6;
+            if (touchOrbit_ && moved && ImGui::IsMouseDown(ImGuiMouseButton_Left)) orbitBy(io.MouseDelta);
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 boxing_ = false;
+                if (std::exchange(touchOrbit_, false) && moved) return;
                 if (std::hypot(io.MousePos.x - boxStart_.x, io.MousePos.y - boxStart_.y) > 4) {
                     const ImVec2 a(std::min(boxStart_.x, io.MousePos.x), std::min(boxStart_.y, io.MousePos.y)), b(std::max(boxStart_.x, io.MousePos.x), std::max(boxStart_.y, io.MousePos.y));
                     regionSelect([&](ImVec2 s) { return s.x >= a.x && s.x <= b.x && s.y >= a.y && s.y <= b.y; }, io.KeyShift, io.KeyCtrl, !io.KeyShift && !io.KeyCtrl);
@@ -4004,7 +4204,7 @@ private:
                 if (!io.KeyShift && !io.KeyCtrl) selectNone();
                 paint(io);
             } else if (selShape_ == SelShape::Lasso) lassoing_ = true, lasso_ = {io.MousePos};
-            else boxing_ = true, boxStart_ = io.MousePos;
+            else boxing_ = true, boxStart_ = io.MousePos, touchOrbit_ = touch() && tool_ != Tool::Select; // (a finger: dragging turns the view, but Select's box)
         }
     }
     // Painting: on the model under the mouse.
@@ -4644,8 +4844,10 @@ private:
     // ───────────────────────────── panels ─────────────────────────────
 
     void setupUi() {
+        keel::ui::setPixelScale(touchScale());
         if (iniPath_.empty()) {
-            iniPath_ = keel::prefPath() + "layout_v3.ini";
+            touchMode_ = fry_touch.b();
+            iniPath_ = keel::prefPath() + (touchMode_ ? "layout_phone.ini" : "layout_v3.ini");
             ImGui::GetIO().IniFilename = iniPath_.c_str();
             if (stdfs::exists(iniPath_)) ImGui::LoadIniSettingsFromDisk(iniPath_.c_str());
         }
@@ -4689,6 +4891,17 @@ private:
         if (node && (node->IsSplitNode() || node->Windows.Size)) return; // (the user's own, from the .ini)
         ImGui::DockBuilderRemoveNodeChildNodes(dock);
         ImGuiID center = dock;
+        if (touch()) { // a phone: tools down the left, the panels on the right (shown when asked for)
+            ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.2f, nullptr, &center);
+            const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.45f, nullptr, &left);
+            const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.36f, nullptr, &center);
+            ImGui::DockBuilderDockWindow("Toolbox", left);
+            ImGui::DockBuilderDockWindow("Tool options", leftBottom);
+            ImGui::DockBuilderDockWindow("Properties", right);
+            ImGui::DockBuilderDockWindow("Layers", right);
+            ImGui::DockBuilderDockWindow("Picture", right);
+            return ImGui::DockBuilderFinish(dock);
+        }
         ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.14f, nullptr, &center);
         const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.5f, nullptr, &left);
         ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.22f, nullptr, &center);
@@ -4705,14 +4918,7 @@ private:
         ImGui::DockBuilderFinish(dock);
     }
 
-    void menuBar() {
-        if (!ImGui::BeginMainMenuBar()) return;
-        if (haveLogo_) {
-            const float h = ImGui::GetFrameHeight() - 4;
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1);
-            logoImage(h);
-        }
-        ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.16f, 1.0f), "Fry3DX");
+    void menus() {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New", "Ctrl+N")) whenSaved(2);
             if (ImGui::MenuItem("Open...", "Ctrl+O")) whenSaved(3);
@@ -4827,13 +5033,27 @@ private:
             if (ImGui::MenuItem("About Fry3DX")) showAbout_ = true;
             ImGui::EndMenu();
         }
+    }
+    void menuBar() {
+        if (!ImGui::BeginMainMenuBar()) return;
+        if (haveLogo_) {
+            const float h = ImGui::GetFrameHeight() - 4;
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1);
+            logoImage(h);
+        }
+        ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.16f, 1.0f), "Fry3DX");
+        if (!touch()) menus();
+        else if (ImGui::BeginMenu("Menu")) { // (a phone: one menu, the others inside it)
+            menus();
+            ImGui::EndMenu();
+        }
         // The tabs: what you're doing.
         {
             const char* names[] = {"Model", "Paint", "Layout", "Render", "Print"};
             const Icon icons[] = {Icon::Objects, Icon::PaintBrush, Icon::Layout, Icon::Render, Icon::Print};
             const char* tips[] = {"Make the shape (Ctrl+1)", "Paint pictures onto it (Ctrl+2)", "Change how its picture is laid out: move, turn and size its frames (Ctrl+3)",
                                   "Light it and save pictures of it (Ctrl+4)", "Get it ready for a 3D printer: size, checks, the printer's plate (Ctrl+5)"};
-            const float tw = 92.0f;
+            const float tw = touch() ? 72.0f : 92.0f;
             ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 20.0f, (ImGui::GetWindowWidth() - tw * 5 - 16) * 0.5f));
             for (int i = 0; i < 5; ++i) {
                 if (i) ImGui::SameLine(0, 4);
@@ -4842,7 +5062,8 @@ private:
                 ImGui::PopID();
             }
         }
-        const std::string file = (path_.empty() ? "Untitled" : stdfs::path(path_).filename().string()) + (dirty_ ? "  *" : "");
+        const std::string file = (path_.empty() ? "Untitled" : fileName(path_)) + (dirty_ ? "  *" : "");
+        if (touch()) return ImGui::EndMainMenuBar(); // (no room on a phone)
         ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(file.c_str()).x - 16);
         ImGui::TextDisabled("%s", file.c_str());
         ImGui::EndMainMenuBar();
@@ -5845,7 +6066,7 @@ private:
         const char* title = "Fry3DX — Frying 3D Extreme";
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(title).x) * 0.5f);
         ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.16f, 1.0f), "%s", title);
-        ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Made by Nexoniarz.");
+        ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Made by Nexoniarz; open source (Apache License 2.0).");
         ImGui::End();
     }
 };

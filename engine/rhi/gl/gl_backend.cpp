@@ -9,6 +9,7 @@
 //     window-space winding, so front faces are clockwise. Only the final blit to the window
 //     (which shows row 0 at the bottom) flips.
 // Requires ARB_bindless_texture (NVIDIA, AMD); without it init fails and the engine uses Vulkan.
+#include "ui/ui.h"
 #include "render/backend.h"
 #include "render/screenshot.h"
 #include "rhi/gl/gl_loader.h"
@@ -332,6 +333,7 @@ public:
     void beginUi() override {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        ui::applyPixelScale();
         ImGui::NewFrame();
     }
     void setVsync(bool on) override { SDL_GL_SetSwapInterval(on ? 1 : 0); }
