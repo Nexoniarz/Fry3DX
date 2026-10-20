@@ -100,7 +100,11 @@ namespace {
     X(void, DrawBuffer, (GLenum))                                                                                    \
     X(void, DrawBuffers, (GLsizei, const GLenum*))                                                                   \
     X(void, TexBuffer, (GLenum, GLenum, GLuint))                                                                     \
-    X(void, BindFragDataLocation, (GLuint, GLuint, const GLchar*))
+    X(void, BindFragDataLocation, (GLuint, GLuint, const GLchar*))                                                   \
+    X(void, GenSamplers, (GLsizei, GLuint*))                                                                         \
+    X(void, DeleteSamplers, (GLsizei, const GLuint*))                                                                \
+    X(void, BindSampler, (GLuint, GLuint))                                                                           \
+    X(void, SamplerParameteri, (GLuint, GLenum, GLint))
 
 namespace glx {
 #define KEEL_GLX_DECLARE(ret, name, params) using name##_t = ret(APIENTRY*) params; name##_t name = nullptr;
@@ -499,6 +503,14 @@ public:
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::StyleColorsDark();
         imgui_ = ImGui_ImplSDL3_InitForOpenGL(window_, context_) && ImGui_ImplOpenGL3_Init(es_ ? "#version 300 es" : "#version 140");
+        if (glx::GenSamplers && glx::BindSampler && glx::SamplerParameteri) { // (3.3 on: UI pictures read as plain numbers, as ImGui's colours are)
+            glx::GenSamplers(1, &uiRawSampler_);
+            glx::SamplerParameteri(uiRawSampler_, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glx::SamplerParameteri(uiRawSampler_, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glx::SamplerParameteri(uiRawSampler_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glx::SamplerParameteri(uiRawSampler_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glx::SamplerParameteri(uiRawSampler_, 0x8A48 /* GL_TEXTURE_SRGB_DECODE_EXT */, 0x8A4A /* GL_SKIP_DECODE_EXT */);
+        }
         log::info("Fallback renderer: tier {} ({})", tier_, tier_ >= 2 ? "shadows, normal maps, highlights, sky reflections, 16 lights" : "lightmaps, sun shadows, sky");
         return imgui_;
     }
@@ -515,6 +527,7 @@ public:
             for (GLuint t : textures_)
                 if (t) glx::DeleteTextures(1, &t);
             for (Model& m : models_) releaseModel(m);
+            if (uiRawSampler_) glx::DeleteSamplers(1, &uiRawSampler_);
             releaseTargets();
             for (GLuint* t : {&shadowMap_, &jointTexture_}) glx::DeleteTextures(1, t);
             glx::DeleteFramebuffers(1, &shadowFbo_);
@@ -538,7 +551,8 @@ public:
     // No block compression here (old GPUs): the renderer decodes BC7 to RGBA8 first.
     void createTexture(TextureId slot, uint32_t w, uint32_t h, bool srgb, const std::vector<std::vector<uint8_t>>& mips,
                        TexFormat = TexFormat::RGBA8) override {
-        if (slot >= textures_.size()) textures_.resize(slot + 1, 0);
+        if (slot >= textures_.size()) textures_.resize(slot + 1, 0), srgb_.resize(slot + 1, false);
+        srgb_[slot] = srgb;
         GLuint& t = textures_[slot];
         if (!t) glx::GenTextures(1, &t);
         glx::BindTexture(GL_TEXTURE_2D, t);
@@ -585,6 +599,22 @@ public:
     }
 
     uint64_t uiTexture(TextureId slot) override { return slot < textures_.size() ? uint64_t(textures_[slot]) : 0; }
+    // (A sampler object where there are any; else the texture's own setting, switched for the draw and back.)
+    UiRawRead uiRawRead(TextureId slot) override {
+        if (slot >= textures_.size() || !srgb_[slot]) return {};
+        if (uiRawSampler_)
+            return {[](const ImDrawList*, const ImDrawCmd* c) { glx::BindSampler(0, GLuint(uintptr_t(c->UserCallbackData))); },
+                    [](const ImDrawList*, const ImDrawCmd*) { glx::BindSampler(0, 0); }, reinterpret_cast<void*>(uintptr_t(uiRawSampler_))};
+        return {[](const ImDrawList*, const ImDrawCmd* c) {
+                    glx::BindTexture(GL_TEXTURE_2D, GLuint(uintptr_t(c->UserCallbackData)));
+                    glx::TexParameteri(GL_TEXTURE_2D, 0x8A48 /* GL_TEXTURE_SRGB_DECODE_EXT */, 0x8A4A /* GL_SKIP_DECODE_EXT */);
+                },
+                [](const ImDrawList*, const ImDrawCmd* c) {
+                    glx::BindTexture(GL_TEXTURE_2D, GLuint(uintptr_t(c->UserCallbackData)));
+                    glx::TexParameteri(GL_TEXTURE_2D, 0x8A48 /* GL_TEXTURE_SRGB_DECODE_EXT */, 0x8A49 /* GL_DECODE_EXT */);
+                },
+                reinterpret_cast<void*>(uintptr_t(textures_[slot]))};
+    }
 
     bool beginFrame(uint32_t& width, uint32_t& height) override {
         int w = 0, h = 0;
@@ -722,6 +752,8 @@ private:
     bool imgui_ = false;
     Program mesh_, depth_, sky_, box_, tonemap_, sprite_;
     std::vector<GLuint> textures_;
+    std::vector<bool> srgb_;
+    GLuint uiRawSampler_ = 0;
     std::vector<Model> models_;
     GLuint frameUbo_ = 0, jointBuffer_ = 0, jointTexture_ = 0, emptyVao_ = 0;
     GLuint shadowMap_ = 0, shadowFbo_ = 0;

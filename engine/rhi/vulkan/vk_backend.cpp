@@ -425,6 +425,7 @@ public:
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if (srgb) ici.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT; // (the UI reads it as plain numbers: uiView)
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         VK_CHECK(vmaCreateImage(device_.allocator(), &ici, &aci, &t.image, &t.alloc, nullptr));
@@ -454,6 +455,12 @@ public:
         vci.format = format;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, uint32_t(mips.size()), 0, 1};
         VK_CHECK(vkCreateImageView(device_.device(), &vci, nullptr, &t.view));
+        // ImGui's colours are sRGB numbers drawn as they are, so the UI must read the picture without
+        // turning it linear first (else it shows too dark): the same image, seen as UNORM.
+        if (srgb) {
+            vci.format = fmt == TexFormat::BC7 ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_R8G8B8A8_UNORM;
+            VK_CHECK(vkCreateImageView(device_.device(), &vci, nullptr, &t.uiView));
+        }
         if (textures_.size() <= slot) textures_.resize(slot + 1);
         // Replaced (hot reload): frames in flight may still sample the old one.
         if (textures_[slot].image) retiredTextures_.emplace_back(frameNumber_, textures_[slot]);
@@ -484,7 +491,10 @@ public:
             uiTextures_.erase(it), it = uiTextures_.end();
         }
         if (it == uiTextures_.end())
-            it = uiTextures_.emplace(slot, UiTexture{uint64_t(ImGui_ImplVulkan_AddTexture(sampler_, textures_[slot].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)), textures_[slot].view}).first;
+            it = uiTextures_.emplace(slot, UiTexture{uint64_t(ImGui_ImplVulkan_AddTexture(sampler_, textures_[slot].uiView ? textures_[slot].uiView : textures_[slot].view,
+                                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)),
+                                                     textures_[slot].view})
+                     .first;
         return it->second.set;
     }
 
@@ -535,6 +545,7 @@ private:
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
+        VkImageView uiView = VK_NULL_HANDLE; // (an sRGB picture seen as UNORM, for the UI)
     };
     // A ray-tracing shape (bottom-level acceleration structure): one per submesh, by first index.
     struct Blas {
@@ -549,6 +560,7 @@ private:
 
     void destroyTexture(Texture& t) {
         if (t.view) vkDestroyImageView(device_.device(), t.view, nullptr);
+        if (t.uiView) vkDestroyImageView(device_.device(), t.uiView, nullptr);
         if (t.image) vmaDestroyImage(device_.allocator(), t.image, t.alloc);
         t = {};
     }

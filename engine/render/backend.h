@@ -14,7 +14,19 @@
 #include <string>
 #include <vector>
 
+struct ImDrawList;
+struct ImDrawCmd;
+
 namespace keel {
+
+// Draw callbacks round an sRGB picture drawn in the UI, so it's read as the plain numbers ImGui's
+// own colours are (read as sRGB it turns linear, and looks too dark). None when uiTexture already
+// gives such a view (Vulkan).
+struct UiRawRead {
+    void (*begin)(const ImDrawList*, const ImDrawCmd*) = nullptr;
+    void (*end)(const ImDrawList*, const ImDrawCmd*) = nullptr;
+    void* data = nullptr;
+};
 
 class Window;
 using TextureId = uint32_t;
@@ -217,6 +229,7 @@ public:
     virtual void uploadModel(uint32_t model, const KmdlModel& kmdl) = 0;
     // A texture as Dear ImGui's ImTextureID, for drawing it in the UI (0 = none).
     virtual uint64_t uiTexture(TextureId slot) = 0;
+    virtual UiRawRead uiRawRead(TextureId) { return {}; }
     // Starts a frame; false when nothing can be drawn (minimised). Sets the drawable size.
     virtual bool beginFrame(uint32_t& width, uint32_t& height) = 0;
     // Renders the packet, then ImGui's draw data, and presents.

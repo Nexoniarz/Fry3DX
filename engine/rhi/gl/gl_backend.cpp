@@ -232,6 +232,12 @@ public:
         gl::SamplerParameteri(clampSampler_, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         gl::SamplerParameteri(clampSampler_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         gl::SamplerParameteri(clampSampler_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        gl::CreateSamplers(1, &uiRawSampler_); // (UI pictures: sRGB read as plain numbers, as ImGui's colours are)
+        gl::SamplerParameteri(uiRawSampler_, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        gl::SamplerParameteri(uiRawSampler_, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl::SamplerParameteri(uiRawSampler_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        gl::SamplerParameteri(uiRawSampler_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        gl::SamplerParameteri(uiRawSampler_, 0x8A48 /* GL_TEXTURE_SRGB_DECODE_EXT */, 0x8A4A /* GL_SKIP_DECODE_EXT */);
         gl::CreateSamplers(1, &compareSampler_);
         gl::SamplerParameteri(compareSampler_, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         gl::SamplerParameteri(compareSampler_, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -320,7 +326,7 @@ public:
             }
             for (GLuint b : {textureTable_, shadowTable_, draws_, joints_, frame_, mirrorFrame_, lights_, views_, cells_, indices_, push_, empty_})
                 gl::DeleteBuffers(1, &b);
-            for (GLuint s : {repeatSampler_, clampSampler_, compareSampler_}) gl::DeleteSamplers(1, &s);
+            for (GLuint s : {repeatSampler_, clampSampler_, compareSampler_, uiRawSampler_}) gl::DeleteSamplers(1, &s);
             for (GLuint p : {meshProgram_, skinnedProgram_, shadowMeshProgram_, shadowSkinnedProgram_, boxProgram_, tonemapProgram_, skyProgram_, hzbProgram_, ssaoProgram_, ssaoBlurProgram_, ssrProgram_, adaptProgram_, volumetricProgram_, spriteProgram_,
                             bloomDownProgram_, bloomUpProgram_, taaProgram_})
                 gl::DeleteProgram(p);
@@ -358,6 +364,7 @@ public:
                 gl::TextureSubImage2D(t.texture, GLint(level), 0, 0, GLsizei(std::max(1u, w >> level)), GLsizei(std::max(1u, h >> level)), GL_RGBA,
                                       GL_UNSIGNED_BYTE, mips[level].data());
         }
+        t.srgb = srgb;
         if (auto it = textures_.find(slot); it != textures_.end()) retiredTextures_.emplace_back(frameNumber_, it->second); // queued draws may use it
         setHandles(slot, t, repeatSampler_, false); // like Vulkan: one repeating sampler for every texture
         textures_[slot] = t;
@@ -384,6 +391,13 @@ public:
     uint64_t uiTexture(TextureId slot) override {
         const auto it = textures_.find(slot);
         return it == textures_.end() ? 0 : uint64_t(it->second.texture);
+    }
+    UiRawRead uiRawRead(TextureId slot) override {
+        const auto it = textures_.find(slot);
+        if (it == textures_.end() || !it->second.srgb) return {};
+        // (A sampler, not the texture's own setting: that's fixed once it has a bindless handle.)
+        return {[](const ImDrawList*, const ImDrawCmd* c) { gl::BindSampler(0, GLuint(uintptr_t(c->UserCallbackData))); },
+                [](const ImDrawList*, const ImDrawCmd*) { gl::BindSampler(0, 0); }, reinterpret_cast<void*>(uintptr_t(uiRawSampler_))};
     }
 
     bool beginFrame(uint32_t& width, uint32_t& height) override {
@@ -424,6 +438,7 @@ private:
     struct Texture {
         GLuint texture = 0;
         GLuint64 handle = 0, shadowHandle = 0;
+        bool srgb = false;
     };
     struct Model {
         GLuint vertices = 0, indices = 0, skin = 0;
@@ -529,7 +544,7 @@ private:
     SDL_Window* window_ = nullptr;
     SDL_GLContext context_ = nullptr;
     bool imgui_ = false;
-    GLuint repeatSampler_ = 0, clampSampler_ = 0, compareSampler_ = 0;
+    GLuint repeatSampler_ = 0, clampSampler_ = 0, compareSampler_ = 0, uiRawSampler_ = 0;
     GLuint mirrorFrame_ = 0; // the mirror's pass's frame data
     GLuint textureTable_ = 0, shadowTable_ = 0, draws_ = 0, joints_ = 0, frame_ = 0, lights_ = 0, views_ = 0, cells_ = 0, indices_ = 0;
     GLuint push_ = 0, empty_ = 0, vao_ = 0;

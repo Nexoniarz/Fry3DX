@@ -76,6 +76,7 @@ public:
 
     // A loaded texture for ImGui::Image (ImTextureID); 0 if it isn't one.
     uint64_t uiTexture(TextureId texture) { return backend_ ? backend_->uiTexture(texture) : 0; }
+    UiRawRead uiRawRead(TextureId texture) { return backend_ ? backend_->uiRawRead(texture) : UiRawRead{}; }
     // Pixel size of a loaded texture.
     glm::ivec2 textureSize(TextureId texture) const {
         const auto it = textureSizes_.find(texture);

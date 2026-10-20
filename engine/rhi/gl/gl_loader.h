@@ -34,6 +34,7 @@
                                           GLenum format, GLsizei size, const void* data))                               \
     X(void, CreateSamplers, (GLsizei n, GLuint* samplers))                                                              \
     X(void, DeleteSamplers, (GLsizei n, const GLuint* samplers))                                                        \
+    X(void, BindSampler, (GLuint unit, GLuint sampler))                                                                 \
     X(void, SamplerParameteri, (GLuint sampler, GLenum pname, GLint param))                                             \
     X(void, SamplerParameterf, (GLuint sampler, GLenum pname, GLfloat param))                                           \
     X(GLuint64, GetTextureSamplerHandleARB, (GLuint texture, GLuint sampler))                                           \
