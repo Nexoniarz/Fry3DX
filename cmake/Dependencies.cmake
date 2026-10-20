@@ -79,6 +79,18 @@ target_link_libraries(volk PUBLIC Vulkan::Headers)
 
 # Dear ImGui and YAPF have no CMake of their own; build them here.
 FetchContent_MakeAvailable(imgui yapf)
+# One hook in ImGui: RenderFrame (the frame behind buttons, fields, checkboxes, combos) asks the
+# engine's UI first, which draws Niveus's keys and wells instead (engine/ui/ui.cpp).
+file(READ ${imgui_SOURCE_DIR}/imgui.cpp _imgui_cpp)
+if(NOT _imgui_cpp MATCHES "GImRenderFrameHook")
+  set(_from "void ImGui::RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders, float rounding)\n{\n    ImGuiContext& g = *GImGui;\n    ImGuiWindow* window = g.CurrentWindow;\n")
+  string(FIND "${_imgui_cpp}" "${_from}" _at)
+  if(_at EQUAL -1)
+    message(FATAL_ERROR "ImGui's RenderFrame has changed: update the hook in cmake/Dependencies.cmake")
+  endif()
+  string(REPLACE "${_from}" "bool (*GImRenderFrameHook)(ImDrawList*, ImVec2, ImVec2, ImU32, bool, float) = nullptr;\n${_from}    if (GImRenderFrameHook && GImRenderFrameHook(window->DrawList, p_min, p_max, fill_col, borders, rounding))\n        return;\n" _imgui_cpp "${_imgui_cpp}")
+  file(WRITE ${imgui_SOURCE_DIR}/imgui.cpp "${_imgui_cpp}")
+endif()
 add_library(imgui STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp

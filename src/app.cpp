@@ -206,7 +206,18 @@ glm::vec3 fromFrame(const Axes& a, const glm::vec3& c) { return a[0] * c.x + a[1
 const ImU32 kAxisCol[3] = {IM_COL32(235, 70, 70, 255), IM_COL32(110, 210, 80, 255), IM_COL32(70, 130, 245, 255)};
 const ImU32 kHot = IM_COL32(255, 225, 90, 255);
 constexpr ImU32 kAccent = IM_COL32(255, 120, 40, 255);
-const ImVec4 kAccentText(1.0f, 0.6f, 0.3f, 1.0f);
+// The UI's colours: Niveus's roles, in the appearance that's showing (keel/ui).
+ImVec4 roleColor(keel::ui::Role r) { return ImGui::ColorConvertU32ToFloat4(keel::ui::color(r)); }
+ImVec4 accentText() { return roleColor(keel::ui::Role::AccentText); }
+// The one button that does it, filled with the accent (until popAccent).
+void pushAccent() {
+    using keel::ui::Role;
+    ImGui::PushStyleColor(ImGuiCol_Button, roleColor(Role::Accent));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, roleColor(Role::AccentHover));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, roleColor(Role::AccentActive));
+    ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::OnAccent));
+}
+void popAccent() { ImGui::PopStyleColor(4); }
 
 // An object as it'll be printed: where it stands, with its finish, checked (kept until it changes).
 struct PrintInfo {
@@ -229,6 +240,7 @@ keel::Cvar fry_touch("fry_touch", "0", keel::CVAR_ARCHIVE, "Fry3DX: the phone la
 #endif
 keel::Cvar fry_uiscale("fry_uiscale", "0", 0, "Fry3DX: draw the UI this many times bigger (0: by the screen)");
 keel::Cvar fry_uisize("fry_uisize", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout's size, times");
+keel::Cvar fry_theme("fry_theme", "0", keel::CVAR_ARCHIVE, "Fry3DX: how it looks: 0 like the desktop, 1 dark, 2 light");
 keel::Cvar fry_autosave("fry_autosave", "2", keel::CVAR_ARCHIVE, "Fry3DX: autosave every this many minutes while there are changes (0: off)");
 
 class App : public keel::Game {
@@ -752,6 +764,7 @@ private:
     bool logoTried_ = false, haveLogo_ = false;
 
     // ── UI ──
+    int appliedTheme_ = -1;
     bool styled_ = false, layoutDone_ = false, showHelp_ = false, showAbout_ = false;
     std::string iniPath_, message_;
     double messageAt_ = -100.0;
@@ -1062,9 +1075,9 @@ private:
         ImGui::Spacing();
         const float bw = 150.0f;
         const int action = askSave_;
-        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+        pushAccent();
         const bool save = ImGui::Button("Save", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
-        ImGui::PopStyleColor();
+        popAccent();
         ImGui::SameLine();
         const bool drop = ImGui::Button(action == 1 ? "Don't save, close" : "Don't save", ImVec2(bw, 0));
         ImGui::SameLine();
@@ -2466,7 +2479,7 @@ private:
     void layoutProperties(float w) {
         Object* o = selected_.empty() ? nullptr : find(active_);
         if (!o) return void(ImGui::TextWrapped("Click an object: its picture's layout shows in the Picture panel."));
-        ImGui::TextColored(kAccentText, "%s", o->name.c_str());
+        ImGui::TextColored(accentText(), "%s", o->name.c_str());
         if (!o->picture || !o->uvsFit()) {
             if (ImGui::Button("Lay it out", ImVec2(w, 0))) readyToPaint(o->id);
             return;
@@ -2683,8 +2696,8 @@ private:
         }
     }
     void printProperties(float w) {
-        auto good = [](const char* t) { ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.4f, 1), "%s", t); };
-        auto bad = [](const std::string& t) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.3f, 1)), ImGui::TextWrapped("%s", t.c_str()), ImGui::PopStyleColor(); };
+        auto good = [](const char* t) { ImGui::TextColored(roleColor(keel::ui::Role::SuccessText), "%s", t); };
+        auto bad = [](const std::string& t) { ImGui::PushStyleColor(ImGuiCol_Text, roleColor(keel::ui::Role::DangerText)), ImGui::TextWrapped("%s", t.c_str()), ImGui::PopStyleColor(); };
         ImGui::SeparatorText("Printer");
         int printer = std::clamp(fry_printer.i(), 0, int(std::size(kPrinters)) - 1);
         ImGui::SetNextItemWidth(w);
@@ -2965,7 +2978,7 @@ private:
                 }
                 if (ImGui::IsItemDeactivated()) renamingFolder_ = 0;
             } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, kAccentText);
+                ImGui::PushStyleColor(ImGuiCol_Text, accentText());
                 const std::string label = std::format("{}  ({})", f->name, inside.size());
                 if (ImGui::Selectable(label.c_str(), picked, ImGuiSelectableFlags_AllowDoubleClick)) { // a folder is a group: all of it picked
                     if (mode_ == Mode::Edit) leaveEdit();
@@ -3179,9 +3192,9 @@ private:
         }
         ImGui::Checkbox("Joined into one object", &c.joined);
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+        pushAccent();
         if (ImGui::Button("Make them", ImVec2(w, 0))) makeCopies(), showCopies_ = false;
-        ImGui::PopStyleColor();
+        popAccent();
         ImGui::End();
     }
     void thickenActive() {
@@ -3206,9 +3219,9 @@ private:
         ImGui::SetNextItemWidth(w);
         if (ImGui::Combo("##dir", &out, "Inwards (a closed shape: hollow)\0Outwards\0")) thicknessOut_ = out == 1;
         ImGui::TextWrapped("A flat or open surface gets a back and edges: a solid you can print. A closed shape becomes hollow, walls this thick (to save material or make a box).");
-        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+        pushAccent();
         if (ImGui::Button("Make it thick", ImVec2(w, 0))) thickenActive(), showThicken_ = false;
-        ImGui::PopStyleColor();
+        popAccent();
         ImGui::End();
     }
     void cleanFlatFaces() {
@@ -3293,7 +3306,7 @@ private:
         ImGui::SetNextWindowBgAlpha(0.8f);
         ImGui::Begin("##touchbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                                 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking);
-        if (now() - messageAt_ < 4.0) ImGui::PushTextWrapPos(maxW), ImGui::TextColored(kAccentText, "%s", message_.c_str()), ImGui::PopTextWrapPos();
+        if (now() - messageAt_ < 4.0) ImGui::PushTextWrapPos(maxW), ImGui::TextColored(accentText(), "%s", message_.c_str()), ImGui::PopTextWrapPos();
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 8));
         const ImGuiStyle& st = ImGui::GetStyle();
         float x = 0; // (where the row's got to)
@@ -3302,9 +3315,9 @@ private:
             if (x > 0 && x + st.ItemSpacing.x + w <= maxW) ImGui::SameLine(), x += st.ItemSpacing.x;
             else x = 0;
             x += w;
-            if (on) ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
+            if (on) pushAccent();
             const bool pressed = ImGui::Button(label);
-            if (on) ImGui::PopStyleColor();
+            if (on) popAccent();
             if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             return pressed;
         };
@@ -4872,38 +4885,10 @@ private:
             ImGui::GetIO().IniFilename = iniPath_.c_str();
             if (stdfs::exists(iniPath_)) ImGui::LoadIniSettingsFromDisk(iniPath_.c_str());
         }
+        if (fry_theme.i() != appliedTheme_) appliedTheme_ = fry_theme.i(), keel::ui::setAppearance(keel::ui::Appearance(std::clamp(appliedTheme_, 0, 2)));
         if (styled_) return;
         styled_ = true;
-        ImGuiStyle& st = ImGui::GetStyle();
-        st.FramePadding = ImVec2(7, 5), st.ItemSpacing = ImVec2(7, 6), st.WindowPadding = ImVec2(9, 9);
-        st.WindowRounding = 5, st.FrameRounding = 4, st.TabRounding = 4, st.GrabRounding = 4, st.ScrollbarSize = 12;
-        st.FontScaleDpi = 0.9f;
-        ImVec4* c = st.Colors; // dark, with Fry3DX's hot orange
-        const ImVec4 orange(1.0f, 0.47f, 0.16f, 1.0f), dim(0.75f, 0.33f, 0.1f, 1.0f);
-        c[ImGuiCol_WindowBg] = ImVec4(0.11f, 0.11f, 0.12f, 0.97f);
-        c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-        c[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.13f, 0.98f);
-        c[ImGuiCol_MenuBarBg] = ImVec4(0.09f, 0.09f, 0.1f, 1.0f);
-        c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.09f, 0.09f, 0.1f, 1.0f);
-        c[ImGuiCol_FrameBg] = ImVec4(0.18f, 0.18f, 0.2f, 1.0f);
-        c[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.24f, 0.27f, 1.0f);
-        c[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.28f, 0.31f, 1.0f);
-        c[ImGuiCol_Button] = ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
-        c[ImGuiCol_ButtonHovered] = ImVec4(0.3f, 0.3f, 0.33f, 1.0f);
-        c[ImGuiCol_ButtonActive] = dim;
-        c[ImGuiCol_Header] = ImVec4(0.22f, 0.22f, 0.25f, 1.0f);
-        c[ImGuiCol_HeaderHovered] = ImVec4(0.3f, 0.3f, 0.33f, 1.0f);
-        c[ImGuiCol_HeaderActive] = dim;
-        c[ImGuiCol_CheckMark] = c[ImGuiCol_SliderGrabActive] = orange;
-        c[ImGuiCol_SliderGrab] = dim;
-        c[ImGuiCol_Tab] = ImVec4(0.14f, 0.14f, 0.15f, 1.0f);
-        c[ImGuiCol_TabHovered] = ImVec4(0.3f, 0.3f, 0.33f, 1.0f);
-        c[ImGuiCol_TabSelected] = ImVec4(0.2f, 0.2f, 0.22f, 1.0f);
-        c[ImGuiCol_TabSelectedOverline] = orange;
-        c[ImGuiCol_TabDimmedSelected] = ImVec4(0.17f, 0.17f, 0.19f, 1.0f);
-        c[ImGuiCol_SeparatorHovered] = c[ImGuiCol_SeparatorActive] = c[ImGuiCol_ResizeGripActive] = orange;
-        c[ImGuiCol_DockingPreview] = ImVec4(1.0f, 0.47f, 0.16f, 0.5f);
-        c[ImGuiCol_TextSelectedBg] = ImVec4(1.0f, 0.47f, 0.16f, 0.35f);
+        ImGui::GetStyle().FontScaleDpi = 0.92f; // (the look itself: keel/ui, Niveus)
     }
 
     void defaultLayout(ImGuiID dock) {
@@ -5046,6 +5031,12 @@ private:
             ImGui::MenuItem("X-ray (see and pick through)", "Alt+Z", &xray_);
             ImGui::MenuItem("Grid", nullptr, &showGrid_);
             ImGui::MenuItem("Ground (in Rendered)", nullptr, &scene_.look.ground);
+            if (ImGui::BeginMenu("Appearance")) {
+                const char* looks[] = {"Like the desktop", "Dark", "Light"};
+                for (int i = 0; i < 3; ++i)
+                    if (ImGui::MenuItem(looks[i], nullptr, fry_theme.i() == i)) keel::execute(std::format("fry_theme {}", i));
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Perspective", "Numpad 5", view_ == View::Perspective)) leaveFlatView();
             if (ImGui::MenuItem("Front", "Numpad 1", view_ == View::Front)) setView(View::Front);
@@ -5072,7 +5063,7 @@ private:
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1);
             logoImage(h);
         }
-        ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.16f, 1.0f), "Fry3DX");
+        ImGui::PushFont(keel::ui::font(keel::ui::Font::Bold), 0.0f), ImGui::TextColored(accentText(), "Fry3DX"), ImGui::PopFont();
         if (!touch()) menus();
         else if (ImGui::BeginMenu("Menu")) { // (a phone: one menu, the others inside it)
             menus();
@@ -5115,14 +5106,21 @@ private:
         if (ImGui::MenuItem("Reference picture...")) dialog(4);
     }
 
-    // A square button with a picture on it (orange when it's the one in use).
+    // How the last item's key looks: filled when it's the one in use, sunk while held.
+    static keel::ui::KeyState keyState(bool on) {
+        using keel::ui::KeyState;
+        return on ? KeyState::On : ImGui::IsItemActive() ? KeyState::Pressed : ImGui::IsItemHovered() ? KeyState::Hovered : KeyState::Normal;
+    }
+    // A square button with a picture on it (the accent when it's the one in use).
     bool iconButton(const char* id, Icon icon, bool on, const char* tip, float size = 38.0f) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const bool hit = ImGui::InvisibleButton(id, ImVec2(size, size));
-        const bool hov = ImGui::IsItemHovered();
+        const keel::ui::KeyState k = keyState(on);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), on ? IM_COL32(196, 86, 26, 255) : hov ? IM_COL32(68, 68, 76, 255) : IM_COL32(40, 40, 46, 255), 6.0f);
-        drawIcon(dl, icon, ImVec2(p.x + size * 0.14f, p.y + size * 0.14f), size * 0.72f, on ? IM_COL32(255, 255, 255, 255) : IM_COL32(215, 215, 222, 255));
+        keel::ui::drawKey(dl, p, ImVec2(p.x + size, p.y + size), 7.0f, k);
+        const float sink = k == keel::ui::KeyState::Pressed ? 1.0f : 0.0f;
+        drawIcon(dl, icon, ImVec2(p.x + size * 0.14f, p.y + size * 0.14f + sink), size * 0.72f, keel::ui::keyText(k));
+        const bool hov = ImGui::IsItemHovered();
         if (hov && tip) ImGui::SetTooltip("%s", tip);
         return hit;
     }
@@ -5130,11 +5128,13 @@ private:
     bool wideButton(const char* id, Icon icon, const char* label, bool on, float width, const char* tip = nullptr, float h = 30.0f) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const bool hit = ImGui::InvisibleButton(id, ImVec2(width, h));
-        const bool hov = ImGui::IsItemHovered();
+        const keel::ui::KeyState k = keyState(on);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(p, ImVec2(p.x + width, p.y + h), on ? IM_COL32(196, 86, 26, 255) : hov ? IM_COL32(68, 68, 76, 255) : IM_COL32(40, 40, 46, 255), 6.0f);
-        drawIcon(dl, icon, ImVec2(p.x + h * 0.15f, p.y + h * 0.13f), h * 0.74f, IM_COL32(235, 235, 240, 255));
-        dl->AddText(ImVec2(p.x + h + 2, p.y + (h - ImGui::GetFontSize()) * 0.5f), IM_COL32(235, 235, 240, 255), label);
+        keel::ui::drawKey(dl, p, ImVec2(p.x + width, p.y + h), 7.0f, k);
+        const float sink = k == keel::ui::KeyState::Pressed ? 1.0f : 0.0f;
+        drawIcon(dl, icon, ImVec2(p.x + h * 0.15f, p.y + h * 0.13f + sink), h * 0.74f, keel::ui::keyText(k));
+        dl->AddText(ImVec2(p.x + h + 2, p.y + (h - ImGui::GetFontSize()) * 0.5f + sink), keel::ui::keyText(k), label);
+        const bool hov = ImGui::IsItemHovered();
         if (hov && tip) ImGui::SetTooltip("%s", tip);
         return hit;
     }
@@ -5209,7 +5209,7 @@ private:
         }
         ImGui::Spacing();
         for (const ToolInfo& t : kTools)
-            if (t.tool == tool_) ImGui::TextColored(kAccentText, "%s", t.name);
+            if (t.tool == tool_) ImGui::TextColored(accentText(), "%s", t.name);
         ImGui::End();
     }
 
@@ -5230,7 +5230,7 @@ private:
             ImGui::PopID();
         });
         for (const PaintToolInfo& t : kPaintTools)
-            if (t.tool == paintTool_) ImGui::TextColored(kAccentText, "%s", t.name);
+            if (t.tool == paintTool_) ImGui::TextColored(accentText(), "%s", t.name);
     }
 
     void paintOptions(float w) {
@@ -5565,7 +5565,7 @@ private:
                                "or put pictures onto: copy one in any app and press Ctrl+V.");
             return;
         }
-        ImGui::TextColored(kAccentText, "%s", o->name.c_str());
+        ImGui::TextColored(accentText(), "%s", o->name.c_str());
         if (!o->picture) {
             int size = pictureSize_ <= 512 ? 0 : pictureSize_ <= 1024 ? 1 : pictureSize_ <= 2048 ? 2 : 3;
             ImGui::SetNextItemWidth(w);
@@ -5992,7 +5992,7 @@ private:
 
     void statusBar() {
         ImGui::Begin("Status", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
-        if (now() - messageAt_ < 4.0) ImGui::TextColored(kAccentText, "%s", message_.c_str());
+        if (now() - messageAt_ < 4.0) ImGui::TextColored(accentText(), "%s", message_.c_str());
         else if (tab_ == Tab::Layout) {
             for (const LayToolInfo& t : kLayTools)
                 if (t.tool == layTool_)
@@ -6019,7 +6019,7 @@ private:
                                               ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking);
         static const char* names[] = {"Perspective", "Front", "Back", "Left", "Right", "Top", "Bottom"};
         static const char* shadings[] = {"Solid", "Rendered", "Wireframe"};
-        ImGui::TextColored(kAccentText, "%s", names[int(view_)]);
+        ImGui::TextColored(accentText(), "%s", names[int(view_)]);
         ImGui::SameLine();
         ImGui::TextDisabled("%s%s", shadings[int(shading_)], xray_ ? ", X-ray" : "");
         for (int i = 1; i < 7; ++i) {
@@ -6058,7 +6058,7 @@ private:
             for (auto [k, what] : list) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(kAccentText, "%s", k);
+                ImGui::TextColored(accentText(), "%s", k);
                 ImGui::TableNextColumn();
                 ImGui::TextWrapped("%s", what);
             }
@@ -6097,7 +6097,7 @@ private:
         logoImage(160);
         const char* title = "Fry3DX — Frying 3D Extreme";
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(title).x) * 0.5f);
-        ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.16f, 1.0f), "%s", title);
+        ImGui::TextColored(accentText(), "%s", title);
         ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Made by Nexoniarz; open source (Apache License 2.0).");
         ImGui::End();
     }
