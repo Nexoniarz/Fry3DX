@@ -26,6 +26,7 @@
     save: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4M12 8v4l3 2"/>',
     code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/>',
     sculpt: '<path d="M4 18c3-1 4-6 8-6s5 5 8 6"/><circle cx="12" cy="7" r="3"/>',
+    plug: '<path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21"/>',
     sphere: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12c2.5 2 14.5 2 17 0"/><circle cx="9" cy="8.5" r="1.5" fill="currentColor" stroke="none"/>',
   };
   const icon = (name) => {

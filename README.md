@@ -49,11 +49,15 @@ Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print**
   where it is; Shift scales both sides at once. Ctrl snaps.
 - **Round, smooth, mirror** any object, changeable any time, baked in when you like.
 - **Materials**: gold, chrome, steel, wood, ceramic, rubber and more, or how metal and rough it
-  is; shown in the view (Solid too), exported with it.
+  is; shown in the view (Solid too), exported with it. **Your own**: "Save its look as a
+  material" in the picker keeps one for every file.
 
 **Editing the shape** (Tab, or double-click)
 - Points, edges, faces (1, 2, 3). Extrude (X), inset (I), round edges (B), loop cut (C), knife (K),
-  cut in four, smooth, merge (M), make a face, flip, separate (P).
+  cut in four, smooth, merge (M), make a face, flip, separate (P), smooth points, push out /
+  pull in along the surface (Alt+S), **bridge** two faces with a tunnel.
+- **Soft selection** (Shift+O): points near what you move follow it, less the further they are;
+  the wheel while dragging sets how far (Blender's proportional editing, Maya's soft select).
 - **Hole** (O): round (M2–M8 screw sizes ready), rectangle, triangle or hexagon (M2–M8 nut
   sizes, with room for prints); all the way through, a pocket, or only its outline as a new face.
 - **Selecting**: click, box, brush or lasso. Shift+click a whole loop, Shift+Ctrl+click an
@@ -65,7 +69,8 @@ Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print**
 - **Copies** in a row or round a circle; **make it thick** (a surface gets a back, a solid goes
   hollow); join objects; join flat faces.
 - **Layers** with folders inside folders, drag and drop, hide and lock whole groups, and a button
-  on every row that brings the camera to it.
+  on every row that brings the camera to it. **Show only the selected** (/ or Shift+H; again:
+  everything).
 
 **Sculpting** (the Paint tab's other side: Tab)
 - Raise, puff out, smooth, flatten, pinch and grab the surface (1 to 6); Ctrl goes the other way,
@@ -90,9 +95,28 @@ Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print**
 
 **Scripts** (the Script panel, F5)
 - Lua with a `fry` library: add shapes and change their settings, combine them, move points by a
-  formula, sculpt, set the materials and the sun. One Ctrl+Z takes back all a script did; an error
-  takes it back itself. Examples in Script > Examples; the **?** button lists every function.
-  It can't reach anything outside the scene (no files, no programs).
+  formula, sculpt, set the materials and the sun, make your own materials (`fry.material{}`).
+  One Ctrl+Z takes back all a script did; an error takes it back itself. Examples in
+  Script > Examples; the **?** button lists every function. It can't reach anything outside the
+  scene (no files, no programs).
+- **Kept in the file**: the Script panel lists the `.fry`'s scripts (new, examples, open,
+  duplicate, rename, remove); they're saved with the model.
+
+**Plug-ins** (Script > Plug-ins)
+- Scripts that stay loaded: put a `.lua` in the plug-ins folder and it can add **commands to the
+  Add, Object or Script menu** (`fry.command{name, menu, settings, run}`; the settings are asked
+  for in a small form first) and **materials** to the picker. Turn each on or off in the Plug-ins
+  window. Three come with it: stairs (straight and spiral), scatter copies, and more materials.
+
+```lua
+fry.plugin{name = "Shelves", about = "A bookcase from the Add menu"}
+fry.command{name = "Bookcase", menu = "add", settings = {{"shelves", 5}, {"width", 0.8}},
+  run = function(s)
+    for i = 0, s.shelves - 1 do
+      fry.add("cube", {width = s.width, depth = 0.3, height = 0.02}).position = {0, 0, i * 0.35}
+    end
+  end}
+```
 
 **The look**: light or dark, or following the desktop (View > Appearance), in
 [Niveus](https://github.com/Nexoniarz/niveus): keys that look like keys, fields set into the panel.
