@@ -1,34 +1,144 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Fry3DX: a cube frying in a cast-iron pan, on a key-like tile (Niveus: light from above,
+       a lit top edge, a shaded bottom one). -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2a2a2f"/><stop offset="1" stop-color="#151518"/>
+    <!-- the tile -->
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d3b38"/><stop offset="0.55" stop-color="#262523"/><stop offset="1" stop-color="#181716"/>
     </linearGradient>
-    <linearGradient id="pan" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3b3b42"/><stop offset="1" stop-color="#1d1d21"/>
+    <linearGradient id="tileEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.32"/><stop offset="0.12" stop-color="#fff" stop-opacity="0.06"/>
+      <stop offset="0.85" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.55"/>
     </linearGradient>
+    <radialGradient id="heat" cx="0.5" cy="0.62" r="0.5">
+      <stop offset="0" stop-color="#ff7a2a" stop-opacity="0.55"/><stop offset="0.6" stop-color="#ff5a1a" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ff5a1a" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+    <filter id="softer" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="12"/></filter>
+    <filter id="wisp" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.5"/></filter>
+
+    <!-- flames -->
     <linearGradient id="flame" x1="0" y1="1" x2="0" y2="0">
-      <stop offset="0" stop-color="#ff4a1c"/><stop offset="1" stop-color="#ffc24a"/>
+      <stop offset="0" stop-color="#ff3a0a" stop-opacity="0.2"/><stop offset="0.3" stop-color="#ff4d12"/><stop offset="0.7" stop-color="#ffa63a"/>
+      <stop offset="1" stop-color="#ffe7a6" stop-opacity="0.9"/>
     </linearGradient>
+
+    <!-- the pan: cast iron -->
+    <linearGradient id="panWall" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#121212"/><stop offset="0.3" stop-color="#3a3a3d"/><stop offset="0.48" stop-color="#5a5a5e"/>
+      <stop offset="0.62" stop-color="#2c2c2f"/><stop offset="1" stop-color="#0e0e0f"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b8b90"/><stop offset="0.35" stop-color="#4a4a4f"/><stop offset="1" stop-color="#1c1c1e"/>
+    </linearGradient>
+    <radialGradient id="panInside" cx="0.5" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#3b3430"/><stop offset="0.55" stop-color="#211e1c"/><stop offset="1" stop-color="#0d0c0c"/>
+    </radialGradient>
+    <linearGradient id="oil" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffcf7a" stop-opacity="0"/><stop offset="0.5" stop-color="#ffd890" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffcf7a" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- the handle: enamel grip on a steel neck -->
+    <linearGradient id="neck" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b9b9be"/><stop offset="0.45" stop-color="#5b5b60"/><stop offset="1" stop-color="#232326"/>
+    </linearGradient>
+    <linearGradient id="grip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb070"/><stop offset="0.3" stop-color="#ff7a2a"/><stop offset="0.75" stop-color="#d4501a"/>
+      <stop offset="1" stop-color="#8f2f0c"/>
+    </linearGradient>
+
+    <!-- the cube: browning at the bottom, glowing hot -->
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff1d6"/><stop offset="1" stop-color="#ffc27e"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffa055"/><stop offset="0.62" stop-color="#ff7c2c"/><stop offset="0.9" stop-color="#b8461a"/>
+      <stop offset="1" stop-color="#6b2a10"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e2672a"/><stop offset="0.62" stop-color="#c24c18"/><stop offset="0.9" stop-color="#7d3011"/>
+      <stop offset="1" stop-color="#45190a"/>
+    </linearGradient>
+    <radialGradient id="bubble" cx="0.35" cy="0.3" r="0.7">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="#ffe9c4" stop-opacity="0.85"/>
+      <stop offset="0.8" stop-color="#ffb35a" stop-opacity="0.25"/><stop offset="1" stop-color="#ffb35a" stop-opacity="0.6"/>
+    </radialGradient>
+    <clipPath id="tileClip"><rect x="24" y="24" width="464" height="464" rx="104"/></clipPath>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="96" fill="url(#bg)"/>
-  <!-- flames under the pan -->
-  <path d="M164 462 c -34 -14 -30 -60 0 -96 c 30 36 34 82 0 96 z" fill="url(#flame)"/>
-  <path d="M236 462 c -34 -14 -30 -60 0 -96 c 30 36 34 82 0 96 z" fill="url(#flame)"/>
-  <path d="M308 462 c -34 -14 -30 -60 0 -96 c 30 36 34 82 0 96 z" fill="url(#flame)"/>
+
+  <!-- the tile -->
+  <rect x="28" y="36" width="456" height="460" rx="104" fill="#000" opacity="0.45" filter="url(#softer)"/>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="url(#tile)"/>
+  <g clip-path="url(#tileClip)">
+    <ellipse cx="248" cy="380" rx="230" ry="150" fill="url(#heat)"/>
+
+    <!-- flames under the pan -->
+    <g opacity="0.95">
+      <path d="M150 476 C 130 476, 126 444, 144 426 C 148 438, 154 427, 151 406 C 176 433, 172 476, 150 476 z" fill="url(#flame)"/>
+      <path d="M150 472 C 140 472, 140 448, 151 433 C 161 448, 160 472, 150 472 z" fill="#ffe9b0" opacity="0.85"/>
+      <path d="M214 476 C 190 476, 186 435, 207 410 C 212 425, 219 412, 215 384 C 244 419, 240 476, 214 476 z" fill="url(#flame)"/>
+      <path d="M214 472 C 202 472, 202 439, 215 419 C 227 439, 226 472, 214 472 z" fill="#ffe9b0" opacity="0.85"/>
+      <path d="M278 476 C 254 476, 250 435, 271 410 C 276 425, 283 412, 279 384 C 308 419, 304 476, 278 476 z" fill="url(#flame)"/>
+      <path d="M278 472 C 266 472, 266 439, 279 419 C 291 439, 290 472, 278 472 z" fill="#ffe9b0" opacity="0.85"/>
+      <path d="M342 476 C 322 476, 318 444, 336 426 C 340 438, 346 427, 343 406 C 368 433, 364 476, 342 476 z" fill="url(#flame)"/>
+      <path d="M342 472 C 332 472, 332 448, 343 433 C 353 448, 352 472, 342 472 z" fill="#ffe9b0" opacity="0.85"/>
+    </g>
+  </g>
+
+  <!-- the pan's shadow-side wall, then its rim, then the cooking surface -->
+  <path d="M60 312 a 182 80 0 0 0 364 0 l -6 30 a 176 76 0 0 1 -352 0 z" fill="#000" opacity="0.35" filter="url(#soft)"/>
+  <path d="M62 314 L 72 346 A 170 74 0 0 0 412 346 L 422 314 Z" fill="url(#panWall)"/>
+  <ellipse cx="242" cy="346" rx="170" ry="74" fill="url(#panWall)"/>
+
   <!-- handle -->
-  <path d="M372 300 L470 250" stroke="#ff7828" stroke-width="30" stroke-linecap="round"/>
-  <!-- the pan, seen a little from above -->
-  <ellipse cx="236" cy="318" rx="170" ry="72" fill="#ff7828"/>
-  <ellipse cx="236" cy="306" rx="150" ry="58" fill="url(#pan)"/>
-  <!-- the cube frying in it -->
-  <g stroke="#1a1a1d" stroke-width="8" stroke-linejoin="round">
-    <path d="M236 92 L330 140 L236 188 L142 140 Z" fill="#ffd2a0"/>
-    <path d="M142 140 L236 188 L236 300 L142 252 Z" fill="#ff8a3a"/>
-    <path d="M330 140 L236 188 L236 300 L330 252 Z" fill="#c9501a"/>
+  <g transform="translate(392 302) rotate(-31)">
+    <rect x="-6" y="-13" width="48" height="26" rx="6" fill="url(#neck)"/>
+    <circle cx="10" cy="0" r="4" fill="#d9d9de"/><circle cx="10" cy="0" r="4" fill="none" stroke="#1a1a1c" stroke-width="1.5"/>
+    <rect x="34" y="-17" width="66" height="34" rx="17" fill="url(#grip)"/>
+    <rect x="40" y="-13" width="52" height="7" rx="3.5" fill="#fff" opacity="0.38"/>
+    <rect x="34" y="-17" width="66" height="34" rx="17" fill="none" stroke="#5a1d07" stroke-opacity="0.6" stroke-width="2"/>
+    <circle cx="85" cy="0" r="6" fill="#3b1406"/><circle cx="85" cy="1.5" r="5" fill="#1a0a04"/>
   </g>
-  <!-- sizzle -->
-  <g stroke="#ffb070" stroke-width="10" stroke-linecap="round" fill="none" opacity="0.9">
-    <path d="M100 210 q-14 -18 0 -36 q14 -18 0 -36"/>
-    <path d="M378 200 q-14 -18 0 -36 q14 -18 0 -36"/>
+
+  <ellipse cx="242" cy="314" rx="180" ry="78" fill="url(#rim)"/>
+  <ellipse cx="242" cy="314" rx="180" ry="78" fill="none" stroke="#fff" stroke-opacity="0.22" stroke-width="2"/>
+  <ellipse cx="242" cy="318" rx="160" ry="64" fill="url(#panInside)"/>
+  <ellipse cx="242" cy="318" rx="160" ry="64" fill="none" stroke="#000" stroke-opacity="0.6" stroke-width="3"/>
+  <!-- oil sheen, and the cube's warm glow and shadow on the oil -->
+  <ellipse cx="242" cy="330" rx="118" ry="38" fill="#ff8a3a" opacity="0.28" filter="url(#softer)"/>
+  <ellipse cx="248" cy="330" rx="96" ry="26" fill="#000" opacity="0.55" filter="url(#soft)"/>
+  <path d="M110 300 q 120 -40 250 -10" stroke="url(#oil)" stroke-width="6" fill="none" stroke-linecap="round"/>
+
+  <!-- the cube -->
+  <g stroke-linejoin="round">
+    <path d="M152 186 L242 234 L242 334 L152 286 Z" fill="url(#left)"/>
+    <path d="M332 186 L242 234 L242 334 L332 286 Z" fill="url(#right)"/>
+    <path d="M242 138 L332 186 L242 234 L152 186 Z" fill="url(#top)"/>
+    <!-- lit edges, shaded edges -->
+    <path d="M152 186 L242 138 L332 186" fill="none" stroke="#fff" stroke-opacity="0.75" stroke-width="3" stroke-linecap="round"/>
+    <path d="M152 186 L242 234 L332 186" fill="none" stroke="#fff" stroke-opacity="0.45" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M242 234 L242 334" fill="none" stroke="#ffd2a0" stroke-opacity="0.55" stroke-width="2.5"/>
+    <path d="M152 186 L242 138 L332 186 L332 286 L242 334 L152 286 Z" fill="none" stroke="#3a1606" stroke-opacity="0.7" stroke-width="3"/>
   </g>
+  <!-- sizzle where it touches -->
+  <g>
+    <circle cx="150" cy="302" r="7" fill="url(#bubble)"/>
+    <circle cx="172" cy="318" r="5" fill="url(#bubble)"/>
+    <circle cx="134" cy="320" r="4" fill="url(#bubble)"/>
+    <circle cx="214" cy="346" r="6" fill="url(#bubble)"/>
+    <circle cx="276" cy="348" r="5" fill="url(#bubble)"/>
+    <circle cx="336" cy="302" r="7" fill="url(#bubble)"/>
+    <circle cx="352" cy="320" r="4.5" fill="url(#bubble)"/>
+    <circle cx="312" cy="326" r="3.5" fill="url(#bubble)"/>
+  </g>
+  <!-- steam -->
+  <g fill="none" stroke="#fff" stroke-linecap="round" filter="url(#wisp)">
+    <path d="M196 120 q -18 -22 0 -44 q 18 -22 0 -44" stroke-width="9" stroke-opacity="0.32"/>
+    <path d="M286 112 q -16 -20 0 -40 q 16 -20 0 -40" stroke-width="8" stroke-opacity="0.26"/>
+  </g>
+
+  <!-- the tile's bevel on top of everything -->
+  <rect x="25" y="25" width="462" height="462" rx="103" fill="none" stroke="url(#tileEdge)" stroke-width="2.5"/>
 </svg>
