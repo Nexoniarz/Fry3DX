@@ -47,4 +47,4 @@ add_custom_target(content ALL
 enable_testing()
 add_subdirectory(tests EXCLUDE_FROM_ALL)
 add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} --output-on-failure
-                  DEPENDS mesh_test USES_TERMINAL VERBATIM)
+                  DEPENDS mesh_test script_test USES_TERMINAL VERBATIM)

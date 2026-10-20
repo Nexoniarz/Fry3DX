@@ -1,3 +1,7 @@
 add_executable(mesh_test mesh_test.cpp)
 target_link_libraries(mesh_test PRIVATE fry_core)
 add_test(NAME mesh_test COMMAND mesh_test WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_executable(script_test script_test.cpp)
+target_link_libraries(script_test PRIVATE fry_script)
+target_compile_definitions(script_test PRIVATE FRY_SCRIPTS_DIR="${PROJECT_SOURCE_DIR}/content/Fry3DX/scripts")
+add_test(NAME script_test COMMAND script_test)

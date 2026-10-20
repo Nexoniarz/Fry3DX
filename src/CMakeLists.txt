@@ -4,6 +4,9 @@ add_library(fry_core STATIC mesh.cpp tools.cpp cut.cpp uv.cpp image.cpp sticker.
 target_include_directories(fry_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(fry_core PUBLIC glm::glm libzstd_static)
 target_compile_definitions(fry_core PUBLIC GLM_ENABLE_EXPERIMENTAL)
+# Scripts (Lua) that build and change the scene: also without a window, for the tests.
+add_library(fry_script STATIC script.cpp)
+target_link_libraries(fry_script PUBLIC fry_core PRIVATE lua)
 
 if(ANDROID) # SDL's Java side loads the app as libmain.so and calls its (SDL_)main
   add_library(fry3dx SHARED app.cpp icons.cpp)
@@ -16,9 +19,9 @@ if(WIN32) # a window program (no console window), with its icon
   set_target_properties(fry3dx PROPERTIES WIN32_EXECUTABLE ON)
   target_link_options(fry3dx PRIVATE /ENTRY:mainCRTStartup)
 endif()
-target_link_libraries(fry3dx PRIVATE fry_core keel stb)
+target_link_libraries(fry3dx PRIVATE fry_core fry_script keel stb)
 add_dependencies(fry3dx content)
-foreach(t fry_core fry3dx)
+foreach(t fry_core fry_script fry3dx)
   if(MSVC)
     target_compile_options(${t} PRIVATE /W3)
   else()

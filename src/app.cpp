@@ -6,6 +6,7 @@
 #include "icons.h"
 #include "mesh.h"
 #include "scene.h"
+#include "script.h"
 #include "shapes.h"
 
 #include <SDL3/SDL.h>
@@ -123,6 +124,20 @@ struct MaterialInfo {
     const char* name;
     float density; // g/cm3
 };
+// What the Script panel starts with.
+const char* kFirstScript = R"(-- A script builds or changes the scene. F5 or Ctrl+Enter runs it;
+-- Ctrl+Z takes back everything it did. The ? button lists what there is.
+
+local legs = 6
+for i = 1, legs do
+  local a = math.rad(i * 360 / legs)
+  local leg = fry.add("cylinder", {radius = 0.03, height = 0.7, color = "#c47a3c"})
+  leg.position = {math.cos(a) * 0.45, math.sin(a) * 0.45, 0}
+end
+local top = fry.add("cylinder", {radius = 0.6, height = 0.05, sides = 48, color = "#d9a066"})
+top.position = {0, 0, 0.7}
+fry.frame()
+)";
 const MaterialInfo kMaterials[] = {{"PLA", 1.24f}, {"PETG", 1.27f}, {"ABS", 1.04f}, {"ASA", 1.07f}, {"TPU", 1.21f}, {"Nylon", 1.14f}, {"Resin", 1.12f}};
 
 const PaintToolInfo kPaintTools[] = {
@@ -257,6 +272,14 @@ public:
         static keel::Cmd open("fry_open", [](const keel::Args& a) { if (a.size() > 1) self->openFile(a[1]); }, "Fry3DX: open a .fry file");
         static keel::Cmd save("fry_save", [](const keel::Args& a) { if (a.size() > 1) self->saveFile(a[1]); }, "Fry3DX: save as");
         static keel::Cmd exp("fry_export", [](const keel::Args& a) { if (a.size() > 1) self->exportFile(a[1]); }, "Fry3DX: export glTF");
+        static keel::Cmd run("fry_run", [](const keel::Args& a) {
+            if (a.size() < 2) return;
+            std::ifstream in(a[1], std::ios::binary);
+            if (!in) return keel::log::warn("Couldn't open {}", a[1]);
+            self->scriptCode_.assign(std::istreambuf_iterator<char>(in), {});
+            self->scriptPath_ = a[1], self->showScript_ = true;
+            self->runScriptNow();
+        }, "Fry3DX: run a Lua script file (fry_run path/to/script.lua)");
         static keel::Cmd add("fry_add", [](const keel::Args& a) { if (a.size() > 1) self->addShape(a[1]); }, "Fry3DX: add a shape (cube, rounded_cube, table...)");
         static keel::Cmd view("fry_view", [](const keel::Args& a) {
             static const char* names[] = {"persp", "front", "back", "left", "right", "top", "bottom"};
@@ -541,6 +564,7 @@ public:
         if (!touch()) statusBar();
         if (!capturing() && (!touch() || viewsOpen_)) viewButtons();
         if (!capturing() && touch()) touchBar();
+        if (showScript_) scriptPanel();
         if (showHelp_) helpWindow();
         if (showAbout_) aboutWindow();
         copiesWindow();
@@ -765,6 +789,11 @@ private:
 
     // ── UI ──
     int appliedTheme_ = -1;
+    // The Script panel: the script being written, where it's from, what it printed.
+    bool showScript_ = false, showScriptHelp_ = false;
+    std::string scriptCode_ = kFirstScript, scriptPath_;
+    std::vector<std::pair<std::string, bool>> scriptLog_; // (line, an error)
+    bool scriptLogToBottom_ = false;
     bool styled_ = false, layoutDone_ = false, showHelp_ = false, showAbout_ = false;
     std::string iniPath_, message_;
     double messageAt_ = -100.0;
@@ -1264,6 +1293,11 @@ private:
             SDL_ShowSaveFileDialog(done, this, w, kind == 8 ? mf : stl, 1, at);
         }
         else if (kind == 5 || kind == 7) SDL_ShowSaveFileDialog(done, this, w, png, 1, at);
+        else if (kind == 10 || kind == 11) {
+            static const SDL_DialogFileFilter lua[] = {{"Lua scripts", "lua"}};
+            if (kind == 10) SDL_ShowOpenFileDialog(done, this, w, lua, 1, at, false);
+            else SDL_ShowSaveFileDialog(done, this, w, lua, 1, scriptPath_.empty() || isUri(scriptPath_) ? at : scriptPath_.c_str());
+        }
         else SDL_ShowOpenFileDialog(done, this, w, pics, 1, at, false);
     }
     void takeDialogResult() {
@@ -1285,6 +1319,8 @@ private:
             return;
         }
         if (isUri(file) && (kind == 8 || kind == 9)) return exportFile(file, -1, kind == 8 ? ".3mf" : ".stl");
+        if (kind == 10) return openScript(isUri(file) ? fromUri(file, "opened.lua") : file, fileName(file));
+        if (kind == 11) return saveScript(file);
         if (kind == 1) openFile(file);
         else if (kind == 2) saveFile(file);
         else if (kind == 3) exportFile(file, filter);
@@ -4300,6 +4336,7 @@ private:
         if (io.WantTextInput) return;
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
         auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
+        if (key(ImGuiKey_F5)) return runScriptNow();
         if (ctrl && key(ImGuiKey_1)) setTab(Tab::Model);
         if (ctrl && key(ImGuiKey_2)) setTab(Tab::Paint);
         if (ctrl && key(ImGuiKey_3)) setTab(Tab::Layout);
@@ -4925,6 +4962,7 @@ private:
         const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.04f, nullptr, &center);
         const ImGuiID picture = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.45f, nullptr, &center); // (the Paint tab's)
         ImGui::DockBuilderDockWindow("Picture", picture);
+        ImGui::DockBuilderDockWindow("Script", picture);
         ImGui::DockBuilderDockWindow("Toolbox", left);
         ImGui::DockBuilderDockWindow("Tool options", leftBottom);
         ImGui::DockBuilderDockWindow("Layers", right);
@@ -5048,6 +5086,17 @@ private:
             ImGui::Separator();
             if (ImGui::MenuItem("Frame selected", "F")) frameSelected();
             if (ImGui::MenuItem("Frame everything", "Home")) frameAll();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Script")) {
+            ImGui::MenuItem("The Script panel", nullptr, &showScript_);
+            if (ImGui::MenuItem("Run it", "F5")) runScriptNow();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Open a script...")) showScript_ = true, dialog(10);
+            if (ImGui::MenuItem("Save the script as...")) dialog(11);
+            exampleScripts();
+            ImGui::Separator();
+            if (ImGui::MenuItem("What scripts can do")) showScript_ = showScriptHelp_ = true;
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {
@@ -6045,6 +6094,132 @@ private:
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drag up and down to zoom");
         if (tab_ != Tab::Render && ImGui::Button(shading_ == Shading::Rendered ? "Show: Solid" : "Show: Rendered", ImVec2(56 * 3 + 6, 0)))
             shading_ = shading_ == Shading::Rendered ? Shading::Solid : Shading::Rendered;
+        ImGui::End();
+    }
+
+    // ───────────────────────────── scripts ─────────────────────────────
+
+    void scriptLine(std::string text, bool error = false) {
+        size_t at = 0;
+        for (size_t nl; (nl = text.find('\n', at)) != std::string::npos; at = nl + 1) scriptLog_.push_back({text.substr(at, nl - at), error});
+        scriptLog_.push_back({text.substr(at), error});
+        if (scriptLog_.size() > 2000) scriptLog_.erase(scriptLog_.begin(), scriptLog_.begin() + 500);
+        scriptLogToBottom_ = true;
+    }
+    // Runs the Script panel's script: one undo step; if it stops with an error, everything it did
+    // is taken back.
+    void runScriptNow() {
+        if (mode_ == Mode::Edit) leaveEdit();
+        const std::string name = scriptPath_.empty() ? "script" : fileName(scriptPath_);
+        pushUndo();
+        bool frame = false;
+        fry::ScriptHost host{&scene_, &selected_, &active_, [this](const std::string& t) { scriptLine(t); }, [&] { frame = true; }};
+        const fry::ScriptResult r = fry::runScript(host, scriptCode_, name);
+        touchAll();
+        if (r.ok && frame) frameAll();
+        if (!r.ok) {
+            undo();
+            redo_.clear();
+            scriptLine(r.error, true);
+            showScript_ = true;
+            return say("The script stopped (nothing it did was kept): " + r.error.substr(0, r.error.find('\n')));
+        }
+        dirty_ = true;
+        say(r.objectsMade ? std::format("{} ran: {} object{} made (Ctrl+Z takes it all back)", name, r.objectsMade, r.objectsMade == 1 ? "" : "s")
+                          : std::format("{} ran (Ctrl+Z takes it back)", name));
+    }
+    void openScript(const std::string& path, const std::string& shownName) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return say("Couldn't open " + shownName);
+        scriptCode_.assign(std::istreambuf_iterator<char>(in), {});
+        scriptPath_ = shownName;
+        showScript_ = true;
+        say("Opened " + shownName + ": F5 runs it");
+    }
+    void saveScript(std::string file) {
+        if (isUri(file)) {
+            const std::string temp = tempFile("script.lua");
+            std::string error;
+            const bool ok = writeFileSafely(temp, scriptCode_.data(), scriptCode_.size(), &error) && toUri(temp, file);
+            return say(ok ? "Saved " + fileName(file) : "Couldn't write the file you picked");
+        }
+        if (stdfs::path(file).extension() != ".lua") file += ".lua";
+        std::string error;
+        if (!writeFileSafely(file, scriptCode_.data(), scriptCode_.size(), &error)) return say("Couldn't save the script: " + error);
+        scriptPath_ = file;
+        say("Saved " + fileName(file));
+    }
+    // The scripts that come with it (content/Fry3DX/scripts), as menu items that load one.
+    void exampleScripts() {
+        if (!ImGui::BeginMenu("Examples")) return;
+        for (const std::string& f : keel::fs::list("scripts", ".lua")) {
+            std::string name = stdfs::path(f).stem().string();
+            std::replace(name.begin(), name.end(), '_', ' ');
+            if (ImGui::MenuItem(name.c_str()))
+                if (auto text = keel::fs::readText(f)) scriptCode_ = *text, scriptPath_ = stdfs::path(f).filename().string(), showScript_ = true;
+        }
+        ImGui::EndMenu();
+    }
+    static int growString(ImGuiInputTextCallbackData* d) {
+        if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+            auto* str = static_cast<std::string*>(d->UserData);
+            str->resize(size_t(d->BufTextLen));
+            d->Buf = str->data();
+        }
+        return 0;
+    }
+    void scriptPanel() {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(std::min(620.0f, vp->WorkSize.x * 0.45f), vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Script", &showScript_)) return ImGui::End();
+        pushAccent();
+        if (ImGui::Button("Run  (F5)")) runScriptNow();
+        popAccent();
+        ImGui::SameLine();
+        if (ImGui::Button("Open...")) dialog(10);
+        ImGui::SameLine();
+        if (ImGui::Button("Save as...")) dialog(11);
+        ImGui::SameLine();
+        if (ImGui::Button("Examples")) ImGui::OpenPopup("examples");
+        if (ImGui::BeginPopup("examples")) {
+            for (const std::string& f : keel::fs::list("scripts", ".lua")) {
+                std::string name = stdfs::path(f).stem().string();
+                std::replace(name.begin(), name.end(), '_', ' ');
+                if (ImGui::Selectable(name.c_str()))
+                    if (auto text = keel::fs::readText(f)) scriptCode_ = *text, scriptPath_ = stdfs::path(f).filename().string();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(showScriptHelp_ ? "Hide help" : "?")) showScriptHelp_ = !showScriptHelp_;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Everything a script can use");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", scriptPath_.empty() ? "(not saved)" : fileName(scriptPath_).c_str());
+
+        const float logH = std::max(90.0f, ImGui::GetContentRegionAvail().y * 0.22f);
+        ImGui::PushFont(keel::ui::font(keel::ui::Font::Mono), 0.0f);
+        if (showScriptHelp_) {
+            ImGui::BeginChild("help", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.45f), ImGuiChildFlags_FrameStyle);
+            ImGui::TextUnformatted(fry::scriptHelp());
+            ImGui::EndChild();
+        }
+        const ImVec2 editor(-FLT_MIN, std::max(120.0f, ImGui::GetContentRegionAvail().y - logH - ImGui::GetStyle().ItemSpacing.y));
+        ImGui::InputTextMultiline("##code", scriptCode_.data(), scriptCode_.capacity() + 1, editor,
+                                  ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, growString, &scriptCode_);
+        const bool typing = ImGui::IsItemActive();
+        ImGui::BeginChild("log", ImVec2(0, 0), ImGuiChildFlags_FrameStyle);
+        if (scriptLog_.empty()) ImGui::TextDisabled("What it prints shows here.");
+        for (const auto& [line, error] : scriptLog_) {
+            if (error) ImGui::PushStyleColor(ImGuiCol_Text, roleColor(keel::ui::Role::DangerText));
+            ImGui::TextUnformatted(line.c_str());
+            if (error) ImGui::PopStyleColor();
+        }
+        if (std::exchange(scriptLogToBottom_, false)) ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+        ImGui::PopFont();
+        if (typing && ImGui::GetIO().KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) runScriptNow();
+        if (typing && ImGui::IsKeyPressed(ImGuiKey_F5, false)) runScriptNow();
         ImGui::End();
     }
 

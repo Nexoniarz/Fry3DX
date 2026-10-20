@@ -37,6 +37,10 @@ FetchContent_Declare(opusfile GIT_REPOSITORY https://github.com/xiph/opusfile.gi
 FetchContent_Declare(dejavu URL https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip
                      URL_HASH SHA256=7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a
                      DOWNLOAD_EXTRACT_TIMESTAMP ON SOURCE_SUBDIR no-cmake)
+# Lua: the scripting language (Script panel, scripts/*.lua). Small, plain C, nothing else needed.
+FetchContent_Declare(lua URL https://www.lua.org/ftp/lua-5.4.7.tar.gz
+                     URL_HASH SHA256=9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30
+                     DOWNLOAD_EXTRACT_TIMESTAMP ON SOURCE_SUBDIR no-cmake)
 # KEEL_YAPF_DIR=/path/to/YAPF uses a local checkout instead.
 FetchContent_Declare(yapf GIT_REPOSITORY https://github.com/Nexoniarz/yapf.git
                      GIT_TAG 06a4e7db9e7e6d90132473e5606f0e6f5b1d6001 SYSTEM) # YAPF 2 (+ yapf_tex_to_rgba8: any surface as RGBA8)
@@ -111,6 +115,24 @@ find_package(Threads REQUIRED)
 target_link_libraries(yapf PRIVATE Threads::Threads $<$<NOT:$<PLATFORM_ID:Windows>>:m>)
 if(NOT MSVC)
   target_compile_options(yapf PRIVATE -O2) # its codecs and the BC7 encoder, even in debug builds
+endif()
+
+# Lua's core and the libraries scripts get (no io, os or loading modules: a script changes the
+# scene, not the computer).
+FetchContent_MakeAvailable(lua)
+set(_lua_src lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio
+             lauxlib lbaselib lcorolib ldblib lmathlib lstrlib ltablib lutf8lib)
+list(TRANSFORM _lua_src PREPEND ${lua_SOURCE_DIR}/src/)
+list(TRANSFORM _lua_src APPEND .c)
+# As C++: its errors are then exceptions, which unwind through the bindings' C++ properly.
+set_source_files_properties(${_lua_src} PROPERTIES LANGUAGE CXX)
+add_library(lua STATIC ${_lua_src})
+if(NOT MSVC)
+  target_compile_options(lua PRIVATE -w)
+endif()
+target_include_directories(lua SYSTEM PUBLIC ${lua_SOURCE_DIR}/src)
+if(NOT WIN32)
+  target_link_libraries(lua PRIVATE m)
 endif()
 
 # Audio: miniaudio for output; Ogg Opus decoding (opusfile).
