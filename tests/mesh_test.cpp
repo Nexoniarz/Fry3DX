@@ -1,6 +1,8 @@
 // The modelling core without a window: shapes are closed and face out, faces with dents
 // triangulate right, extrude / inset / merge keep the mesh whole, and files round-trip.
 #include "bvh.h"
+#include "import.h"
+#include "text.h"
 #include "mesh.h"
 #include "image.h"
 #include "scene.h"
@@ -363,6 +365,32 @@ int main() {
         CHECK(combine(a, drill, Combine::Subtract) && checkForPrint(a).closed() && checkForPrint(a).volume < 1.0f && checkForPrint(a).volume > 0.85f,
               "a cylinder drilled through a cube: closed, %g m3", checkForPrint(a).volume);
     }
+    // Text as a shape: letters with holes (O, A, B) come out closed, as tall as asked.
+    {
+        std::ifstream in(FRY_FONTS_DIR "/InstrumentSans-Bold.ttf", std::ios::binary);
+        const std::vector<uint8_t> font{std::istreambuf_iterator<char>(in), {}};
+        TextStyle st;
+        st.height = 0.05f, st.depth = 0.01f;
+        std::string err;
+        const Mesh t = makeText(font, "Fry 3D", st, &err);
+        const PrintCheck c = checkForPrint(t);
+        CHECK(!t.faces.empty() && c.closed() && std::abs(boundsMax(t).z - 0.01f) < 1e-4f && boundsMax(t).y > 0.045f && boundsMax(t).y < 0.06f,
+              "text \"Fry 3D\": %zu faces, closed %d, %.3f m tall %s", t.faces.size(), int(c.closed()), boundsMax(t).y, err.c_str());
+        // (every face's triangles cover just the face: letters are dented, with points in straight lines)
+        int covered = 0;
+        for (size_t f = 0; f < t.faces.size(); ++f) {
+            float a = 0;
+            for (const auto& tr : triangulate(t, int(f))) a += 0.5f * glm::length(glm::cross(t.verts[size_t(tr[1])] - t.verts[size_t(tr[0])], t.verts[size_t(tr[2])] - t.verts[size_t(tr[0])]));
+            covered += std::abs(a - faceArea(t, int(f))) <= faceArea(t, int(f)) * 1e-2f + 1e-12f; // (a sliver far out: float rounding)
+        }
+        CHECK(covered == int(t.faces.size()), "letters' faces made into triangles that cover them (%d of %zu)", covered, t.faces.size());
+        // (letters drawn as overlapping strokes are whole: an F is as wide as an E, not just its stem)
+        const float fw = boundsMax(makeText(font, "F", st)).x - boundsMin(makeText(font, "F", st)).x, ew = boundsMax(makeText(font, "E", st)).x - boundsMin(makeText(font, "E", st)).x;
+        CHECK(fw > ew * 0.8f && checkForPrint(makeText(font, "F", st)).closed(), "an F is whole (%.1f mm wide, an E %.1f)", fw * 1000, ew * 1000);
+        const Mesh o = makeText(font, "O", st);
+        CHECK(checkForPrint(o).closed() && checkForPrint(o).volume < 0.05f * 0.04f * 0.01f, "an O has its hole (%g m3)", checkForPrint(o).volume);
+        CHECK(makeText({}, "x", st, &err).faces.empty() && !err.empty(), "no font: nothing, and why");
+    }
     // The tree of boxes finds the same nearest hit as trying every triangle (and the same "in the way").
     {
         Mesh m = makeSphere(32, 16, 1.0f);
@@ -449,6 +477,23 @@ int main() {
     CHECK(exportModel((dir / "a.gltf").string(), s, {}) && std::filesystem::file_size(dir / "a.bin") > 0, "exports glTF");
     for (const auto& [ext, what] : exportFormats())
         CHECK(exportModel((dir / ("b" + ext)).string(), s, {}) && std::filesystem::file_size(dir / ("b" + ext)) > 100, "exports %s", ext.c_str());
+    // Read back in: the same shape, the same size (STL and 3MF go by millimetres, OBJ and glTF by Y up).
+    for (const std::string ext : {".stl", ".obj", ".3mf", ".glb", ".gltf"}) {
+        std::string err;
+        const auto in = importModel((dir / ((ext == ".gltf" ? "a" : "b") + ext)).string(), &err);
+        const float want = checkForPrint(cube).volume, got = in.empty() ? 0 : checkForPrint(in[0].mesh).volume;
+        if (ext == ".3mf") CHECK(!in.empty() && in[0].name == o.name, "a 3MF's name, as it was (%s)", in.empty() ? "" : in[0].name.c_str());
+        CHECK(in.size() == 1 && checkForPrint(in[0].mesh).closed() && std::abs(got - want) < want * 1e-3f, "imports %s back (%g m3, %s)", ext.c_str(), got, err.c_str());
+    }
+    {
+        const uint8_t packed[] = {115,43,170,52,118,137,80,40,74,77,76,41,86,48,246,117,83,72,203,204,73,45,214,83,112,27,21,31,21,31,21,31,244,226,12,140,76,204,44,172,108,236,28,156,92,220,60,188,124,252,2,130,66,194,34,162,98,226,18,146,82,210,50,178,114,242,10,138,74,202,42,170,106,234,26,154,90,218,58,186,122,250,6,134,70,198,38,166,102,230,22,150,86,214,54,182,118,246,14,142,78,206,46,174,110,238,30,158,94,222,62,190,126,254,1,129,65,193,33,161,97,225,17,145,81,209,49,177,113,241,9,137,73,201,41,169,105,233,25,153,89,217,57,185,121,249,5,133,69,197,37,165,101,229,21,149,85,213,53,181,117,245,13,141,77,205,45,173,109,237,29,157,93,221,61,189,125,253,19,38,78,154,60,101,234,180,233,51,102,206,154,61,103,238,188,249,11,22,46,90,188,100,233,178,229,43,86,174,90,189,102,237,186,245,27,54,110,218,188,101,235,182,237,59,118,238,218,189,103,239,190,253,7,14,30,58,124,228,232,177,227,39,78,158,58,125,230,236,185,243,23,46,94,186,124,229,234,181,235,55,110,222,186,125,231,238,189,251,15,30,62,122,252,228,233,179,231,47,94,190,122,253,230,237,187,247,31,62,126,250,252,229,235,183,239,63,126,254,250,253,231,239,191,255,0};
+        std::string want;
+        for (int i = 0; i < 40; ++i) want += "Fry3DX reads 3MF files. ";
+        for (int i = 0; i < 256; ++i) want += char(i);
+        const std::vector<uint8_t> out = inflate(packed, sizeof packed);
+        CHECK(std::string(out.begin(), out.end()) == want && out.size() == 1216, "unpacks DEFLATE (%zu bytes)", out.size());
+        CHECK(inflate(packed, sizeof packed / 2).empty(), "a cut-short DEFLATE: nothing");
+    }
 
     // Its own file: one packed file with its pictures and layers, back the same; old text ones open too.
     {

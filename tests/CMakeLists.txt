@@ -1,5 +1,6 @@
 add_executable(mesh_test mesh_test.cpp)
 target_link_libraries(mesh_test PRIVATE fry_core)
+target_compile_definitions(mesh_test PRIVATE FRY_FONTS_DIR="${PROJECT_SOURCE_DIR}/content/engine/fonts")
 add_test(NAME mesh_test COMMAND mesh_test WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 add_executable(script_test script_test.cpp)
 target_link_libraries(script_test PRIVATE fry_script)

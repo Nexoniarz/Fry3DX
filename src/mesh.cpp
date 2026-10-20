@@ -182,6 +182,10 @@ std::vector<std::array<int, 3>> triangulate(const Mesh& m, int face) {
     const glm::vec3 v = glm::cross(n, u);
     std::vector<glm::vec2> p;
     for (int i : f) p.emplace_back(glm::dot(m.verts[size_t(i)], u), glm::dot(m.verts[size_t(i)], v));
+    // (the tests go by the face's own size: a letter 5 mm tall the same as a wall 5 m wide)
+    glm::vec2 lo(1e30f), hi(-1e30f);
+    for (const glm::vec2& q : p) lo = glm::min(lo, q), hi = glm::max(hi, q);
+    const float span = std::max(hi.x - lo.x, hi.y - lo.y), eps = std::max(span * span * 1e-9f, 1e-30f);
     auto cross2 = [](glm::vec2 a, glm::vec2 b, glm::vec2 c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
     std::vector<int> left(f.size());
     std::iota(left.begin(), left.end(), 0);
@@ -189,12 +193,16 @@ std::vector<std::array<int, 3>> triangulate(const Mesh& m, int face) {
         bool cut = false;
         for (size_t i = 0; i < left.size() && !cut; ++i) {
             const int a = left[(i + left.size() - 1) % left.size()], b = left[i], c = left[(i + 1) % left.size()];
-            if (cross2(p[size_t(a)], p[size_t(b)], p[size_t(c)]) <= 1e-12f) continue; // dents in, or flat
+            const glm::vec2 pa = p[size_t(a)], pb = p[size_t(b)], pc = p[size_t(c)];
+            if (cross2(pa, pb, pc) <= eps) continue; // dents in, or flat
             bool inside = false;
             for (int o : left) {
                 if (o == a || o == b || o == c) continue;
                 const glm::vec2 q = p[size_t(o)];
-                if (cross2(p[size_t(a)], p[size_t(b)], q) >= 0 && cross2(p[size_t(b)], p[size_t(c)], q) >= 0 && cross2(p[size_t(c)], p[size_t(a)], q) >= 0) {
+                if (q == pa || q == pb || q == pc) continue; // (the same place: where a hole's cut joins)
+                // (strictly inside, or on the new edge a-c: a point on the outline's own edges a-b, b-c is no harm)
+                const float ab = cross2(pa, pb, q), bc = cross2(pb, pc, q), ca = cross2(pc, pa, q);
+                if (ab > eps && bc > eps && ca >= -eps) {
                     inside = true;
                     break;
                 }
@@ -204,6 +212,11 @@ std::vector<std::array<int, 3>> triangulate(const Mesh& m, int face) {
             left.erase(left.begin() + std::ptrdiff_t(i));
             cut = true;
         }
+        if (!cut) // (no ear: a point in a straight line between its neighbours goes, it covers nothing)
+            for (size_t i = 0; i < left.size() && !cut; ++i) {
+                const int a = left[(i + left.size() - 1) % left.size()], b = left[i], c = left[(i + 1) % left.size()];
+                if (std::abs(cross2(p[size_t(a)], p[size_t(b)], p[size_t(c)])) <= eps) left.erase(left.begin() + std::ptrdiff_t(i)), cut = true;
+            }
         if (!cut) { // (a tangled face: a fan of what's left)
             for (size_t i = 1; i + 1 < left.size(); ++i) out.push_back({f[size_t(left[0])], f[size_t(left[i])], f[size_t(left[i + 1])]});
             return out;

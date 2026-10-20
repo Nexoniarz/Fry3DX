@@ -11,6 +11,8 @@
 #include "script.h"
 #include "sculpt.h"
 #include "shapes.h"
+#include "import.h"
+#include "text.h"
 
 #include <SDL3/SDL.h>
 #if defined(__ANDROID__)
@@ -595,6 +597,10 @@ public:
             self->pie_ = a.size() > 1 && a[1] == "views" ? 2 : 1, self->pieStays_ = true;
             self->pieAt_ = ImVec2((self->viewMin_.x + self->viewMax_.x) / 2, (self->viewMin_.y + self->viewMax_.y) / 2);
         }, "Fry3DX: show a pie menu (tools | views)");
+        static keel::Cmd import("fry_import", [](const keel::Args& a) { if (a.size() > 1) self->importFile(a[1]); }, "Fry3DX: import a model (STL, OBJ, 3MF, glTF)");
+        static keel::Cmd text("fry_text", [](const keel::Args& a) {
+            if (a.size() > 1) std::snprintf(self->textBuf_, sizeof self->textBuf_, "%s", a[1].c_str()), self->addText();
+        }, "Fry3DX: add text as a shape");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
             if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
@@ -722,6 +728,7 @@ public:
         commandForm();
         copiesWindow();
         thickenWindow();
+        textWindow();
         pushWindow();
         saveQuestion();
         recoverWindow();
@@ -1546,6 +1553,14 @@ private:
             if (kind == 10) SDL_ShowOpenFileDialog(done, this, w, lua, 1, at, false);
             else SDL_ShowSaveFileDialog(done, this, w, lua, 1, scriptPath_.empty() || isUri(scriptPath_) ? at : scriptPath_.c_str()); // (at: the last folder)
         }
+        else if (kind == 12) {
+            static const SDL_DialogFileFilter in[] = {{"3D models (STL, OBJ, 3MF, glTF)", "stl;obj;3mf;glb;gltf"}};
+            SDL_ShowOpenFileDialog(done, this, w, in, 1, at, true);
+        }
+        else if (kind == 13) {
+            static const SDL_DialogFileFilter fonts[] = {{"Fonts", "ttf;otf"}};
+            SDL_ShowOpenFileDialog(done, this, w, fonts, 1, at, false);
+        }
         else SDL_ShowOpenFileDialog(done, this, w, pics, 1, at, false);
     }
     void takeDialogResult() {
@@ -1567,6 +1582,11 @@ private:
             return;
         }
         if (isUri(file) && (kind == 8 || kind == 9)) return exportFile(file, -1, kind == 8 ? ".3mf" : ".stl");
+        if (kind == 12) return importFile(isUri(file) ? fromUri(file, "imported-" + fileName(file)) : file);
+        if (kind == 13) {
+            textFontFile_ = isUri(file) ? fromUri(file, "font-" + fileName(file)) : file;
+            return;
+        }
         if (kind == 10) return openScript(isUri(file) ? fromUri(file, "opened.lua") : file, fileName(file));
         if (kind == 11) return saveScript(file);
         if (kind == 1) openFile(file);
@@ -3692,6 +3712,104 @@ private:
         changedShape(*o);
         say(std::format("{} made {:.1f} mm thick{}", o->name, thickness_ * 1000, checkForPrint(o->mesh).closed() ? " (closed all round)" : ""));
     }
+    // A model made elsewhere: each of its objects, standing on the ground in the middle of the view.
+    void importFile(const std::string& file) {
+        std::string err;
+        std::vector<fry::ImportedMesh> got = fry::importModel(file, &err);
+        if (got.empty()) return say(err.empty() ? "Nothing in " + fileName(file) : err);
+        pushUndo();
+        if (mode_ == Mode::Edit) leaveEdit();
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        for (const auto& g : got) lo = glm::min(lo, boundsMin(g.mesh)), hi = glm::max(hi, boundsMax(g.mesh));
+        const glm::vec3 shift(-(lo.x + hi.x) / 2, -(lo.y + hi.y) / 2, -lo.z), at(std::round(target_.x * 10) / 10, std::round(target_.y * 10) / 10, 0.0f);
+        selected_.clear();
+        size_t faces = 0;
+        for (auto& g : got) {
+            // (each object's own middle as its place, so it turns about itself)
+            const glm::vec3 lo1 = boundsMin(g.mesh) + shift, hi1 = boundsMax(g.mesh) + shift, mid((lo1.x + hi1.x) / 2, (lo1.y + hi1.y) / 2, lo1.z);
+            transform(g.mesh, glm::translate(glm::mat4(1.0f), shift - mid));
+            faces += g.mesh.faces.size();
+            Object& o = addObject(g.name.empty() ? "Imported" : g.name, std::move(g.mesh));
+            o.position = at + mid;
+            selected_.insert(o.id), active_ = o.id;
+        }
+        const glm::vec3 size = (hi - lo) * 1000.0f;
+        say(std::format("{}: {} object{}, {} faces, {:.1f} x {:.1f} x {:.1f} mm", fileName(file), got.size(), got.size() == 1 ? "" : "s", faces, size.x, size.y, size.z));
+        if (glm::length(hi - lo) > 0) frameSelected();
+    }
+
+    // ── Text as a shape ──
+    bool showText_ = false;
+    char textBuf_[512] = "Fry3DX";
+    int textFont_ = 2, textAlign_ = 0;
+    float textHeight_ = 0.05f, textDepth_ = 0.01f, textSpacing_ = 0.0f;
+    bool textStanding_ = false;
+    std::string textFontFile_; // (a font of your own, picked from a file)
+    static constexpr const char* kFonts[] = {"Instrument Sans", "Instrument Sans (semi-bold)", "Instrument Sans (bold)", "JetBrains Mono"};
+    static constexpr const char* kFontFiles[] = {"fonts/InstrumentSans-Regular.ttf", "fonts/InstrumentSans-SemiBold.ttf", "fonts/InstrumentSans-Bold.ttf", "fonts/JetBrainsMono-Regular.ttf"};
+    void textWindow() {
+        if (!showText_) return;
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Add text", &showText_, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) return ImGui::End();
+        const float w = 300;
+        ImGui::InputTextMultiline("##text", textBuf_, sizeof textBuf_, ImVec2(w, ImGui::GetTextLineHeight() * 3.6f));
+        ImGui::SetNextItemWidth(w);
+        const std::string fontName = textFontFile_.empty() ? kFonts[textFont_] : stdfs::path(textFontFile_).filename().string();
+        if (ImGui::BeginCombo("##font", fontName.c_str())) {
+            for (int i = 0; i < int(std::size(kFonts)); ++i)
+                if (ImGui::Selectable(kFonts[i], textFontFile_.empty() && textFont_ == i)) textFont_ = i, textFontFile_.clear();
+            if (ImGui::Selectable("A font file of your own (.ttf, .otf)...")) dialog(13);
+            ImGui::EndCombo();
+        }
+        float mm[3] = {textHeight_ * 1000, textDepth_ * 1000, textSpacing_ * 100};
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::DragFloat("##h", &mm[0], 0.2f, 0.5f, 1e5f, "letters %.1f mm tall")) textHeight_ = std::max(mm[0], 0.1f) / 1000;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::DragFloat("##d", &mm[1], 0.1f, 0.1f, 1e5f, "%.1f mm thick")) textDepth_ = std::max(mm[1], 0.05f) / 1000;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::DragFloat("##s", &mm[2], 0.2f, -30, 100, "letters %+.0f%% further apart")) textSpacing_ = mm[2] / 100;
+        ImGui::SetNextItemWidth(w);
+        ImGui::Combo("##al", &textAlign_, "Lines to the left\0Lines in the middle\0Lines to the right\0");
+        ImGui::Checkbox("Standing up (a sign), not lying (a label to print)", &textStanding_);
+        pushAccent();
+        if (ImGui::Button("Add it", ImVec2(w, 0))) addText();
+        popAccent();
+        ImGui::End();
+    }
+    void addText() {
+        std::vector<uint8_t> font;
+        if (!textFontFile_.empty()) {
+            std::ifstream in(textFontFile_, std::ios::binary);
+            font.assign(std::istreambuf_iterator<char>(in), {});
+        } else if (auto f = keel::fs::read(kFontFiles[textFont_]))
+            font = std::move(*f);
+        fry::TextStyle st;
+        st.height = textHeight_, st.depth = textDepth_, st.spacing = textSpacing_, st.align = textAlign_;
+        std::string err;
+        Mesh m = fry::makeText(font, textBuf_, st, &err);
+        if (m.faces.empty()) return say(err.empty() ? "No text to make" : err);
+        // (the letters' middle on the ground at the origin; standing up: facing the front)
+        const glm::vec3 lo = boundsMin(m), hi = boundsMax(m);
+        transform(m, glm::translate(glm::mat4(1.0f), glm::vec3(-(lo.x + hi.x) / 2, -(lo.y + hi.y) / 2, 0.0f)));
+        if (textStanding_) transform(m, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, (hi.y - lo.y) / 2)) * glm::rotate(glm::mat4(1.0f), kPi / 2, glm::vec3(1, 0, 0)));
+        pushUndo();
+        if (mode_ == Mode::Edit) leaveEdit();
+        std::string name = textBuf_;
+        if (const size_t nl = name.find('\n'); nl != std::string::npos) name.resize(nl);
+        if (name.size() > 24) name = name.substr(0, 24) + "...";
+        Object& o = addObject("Text: " + name, std::move(m));
+        o.position = glm::vec3(std::round(target_.x * 10) / 10, std::round(target_.y * 10) / 10, 0.0f);
+        // (reading left to right as the view looks: turned to the nearest quarter)
+        const glm::vec3 f = viewDir();
+        if (std::abs(f.x) + std::abs(f.y) > 1e-4f) {
+            const float turn = std::round(std::atan2(-f.x, f.y) / (kPi / 2)) * (kPi / 2);
+            o.rotation = glm::angleAxis(turn, glm::vec3(0, 0, 1));
+        }
+        selected_ = {o.id}, active_ = o.id;
+        showText_ = false;
+        say(std::format("Text added, {:.0f} mm tall letters, {} faces", textHeight_ * 1000, o.mesh.faces.size()));
+    }
+
     void thickenWindow() {
         if (!showThicken_) return;
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -4904,7 +5022,7 @@ private:
             if (key(ImGuiKey_Z)) shift ? redo() : undo();
             if (key(ImGuiKey_Y)) redo();
             if (key(ImGuiKey_S)) shift || path_.empty() ? dialog(2) : void(saveFile(path_));
-            if (key(ImGuiKey_O)) whenSaved(3);
+            if (key(ImGuiKey_O)) shift ? dialog(12) : whenSaved(3);
             if (key(ImGuiKey_N)) whenSaved(2);
             if (key(ImGuiKey_E)) dialog(3);
             if (key(ImGuiKey_Q)) whenSaved(1);
@@ -5561,7 +5679,7 @@ private:
         auto model = [this] { return tab_ == Tab::Model; };
         add("file.new", "New", "File", "Ctrl+N", [this] { whenSaved(2); }, {}, "empty start");
         add("file.open", "Open...", "File", "Ctrl+O", [this] { whenSaved(3); }, {}, "load fry");
-        add("file.import", "Import a model (STL, OBJ, 3MF)...", "File", "Ctrl+Shift+O", [this] { dialog(12); }, {}, "load mesh stl obj 3mf");
+        add("file.import", "Import a model (STL, OBJ, 3MF, glTF)...", "File", "Ctrl+Shift+O", [this] { dialog(12); }, {}, "load mesh stl obj 3mf");
         add("file.save", "Save", "File", "Ctrl+S", [this] { path_.empty() ? dialog(2) : void(saveFile(path_)); });
         add("file.saveas", "Save as...", "File", "Ctrl+Shift+S", [this] { dialog(2); });
         add("file.export", "Export (GLB, glTF, OBJ, STL, PLY, 3MF, FBX)...", "File", "Ctrl+E", [this] { dialog(3); }, {}, "stl obj gltf glb ply fbx 3mf print");
@@ -5728,6 +5846,7 @@ private:
             if (ImGui::MenuItem("Save", "Ctrl+S")) path_.empty() ? dialog(2) : void(saveFile(path_));
             if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S")) dialog(2);
             ImGui::Separator();
+            if (ImGui::MenuItem("Import a model (STL, OBJ, 3MF, glTF)...", "Ctrl+Shift+O")) dialog(12);
             if (ImGui::MenuItem("Export (GLB, glTF, OBJ, STL, PLY)...", "Ctrl+E")) dialog(3);
             if (ImGui::BeginMenu("Autosave")) {
                 static const int every[] = {1, 2, 5, 10, 0};
@@ -7522,7 +7641,7 @@ private:
     }
 
     // ── (being made) ──
-    bool showText_ = false, showSpin_ = false, showPrintSize_ = false, liveMirror_ = false;
+    bool showSpin_ = false, showPrintSize_ = false, liveMirror_ = false;
     void repairSelected() {}
     void startSlide() {}
 
