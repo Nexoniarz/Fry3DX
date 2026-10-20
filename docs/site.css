@@ -1,0 +1,142 @@
+/* Fry3DX's site: layout only. Every colour, shadow, radius, type size and duration comes from
+   Niveus (niveus/niveus.css); if a hex value turns up here, Niveus is missing a token. */
+
+html { scroll-padding-top: 5rem; }
+body { background: var(--nv-color-background); }
+
+.shell {
+  max-inline-size: var(--nv-layout-max-width);
+  margin-inline: auto;
+  padding-inline: var(--nv-layout-gutter);
+}
+.section { padding-block: var(--nv-space-16); }
+.section__head {
+  max-inline-size: var(--nv-measure);
+  margin-block-end: var(--nv-space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv-space-3);
+}
+
+/* --- Bar ------------------------------------------------------------------- */
+.brand-logo { inline-size: 1.75rem; block-size: 1.75rem; }
+@media (max-width: 60rem) { .nav-links { display: none; } }
+@media (max-width: 34rem) { .theme-switch, #gh-top { display: none; } }
+
+/* --- Hero ------------------------------------------------------------------ */
+.hero {
+  display: grid;
+  gap: var(--nv-space-12);
+  padding-block: var(--nv-space-16) var(--nv-space-8);
+  align-items: center;
+}
+@media (min-width: 64rem) {
+  .hero { grid-template-columns: 5fr 7fr; gap: var(--nv-space-12); }
+}
+.hero__copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nv-space-5);
+  align-items: flex-start;
+}
+.hero__title { font-size: clamp(var(--nv-font-size-4xl), 5.5vw, var(--nv-font-size-5xl)); }
+.hero__bed { padding: var(--nv-space-6); min-inline-size: 0; }
+.app-window { max-inline-size: 100%; }
+.app-window__shot, .shot__img {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+}
+
+/* --- Why ------------------------------------------------------------------- */
+.why { max-inline-size: 52rem; margin-inline: auto; }
+
+/* --- Features -------------------------------------------------------------- */
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr));
+  gap: var(--nv-space-5);
+}
+.feature__icon {
+  inline-size: var(--nv-space-10);
+  block-size: var(--nv-space-10);
+  display: grid;
+  place-items: center;
+  margin-block-end: var(--nv-space-4);
+  border-radius: var(--nv-radius-md);
+  background-color: var(--nv-color-accent-subtle);
+  color: var(--nv-color-accent-text);
+}
+.feature__icon svg { inline-size: var(--nv-space-5); block-size: var(--nv-space-5); }
+.feature .nv-card__title { margin-block-end: var(--nv-space-2); }
+
+/* --- Screenshots ----------------------------------------------------------- */
+.shots { margin-block-start: var(--nv-space-6); }
+.shot { display: grid; gap: var(--nv-space-4); }
+.shot[hidden] { display: none; }
+
+/* --- Two side by side -------------------------------------------------------- */
+.split {
+  display: grid;
+  gap: var(--nv-space-6);
+  align-items: start;
+}
+@media (min-width: 56rem) { .split { grid-template-columns: 1fr 1fr; } }
+
+.ticks { display: grid; gap: var(--nv-space-2); padding-inline-start: var(--nv-space-5); }
+
+/* --- Code -------------------------------------------------------------------- */
+.code-card { overflow: hidden; }
+.code-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nv-space-3);
+}
+.code {
+  margin: 0;
+  padding: var(--nv-space-4);
+  overflow-x: auto;
+  border-radius: var(--nv-radius-md);
+  background: var(--nv-color-surface-inset);
+  box-shadow: var(--nv-elevation-inset-sm);
+  font: var(--nv-font-code);
+  color: var(--nv-color-text-primary);
+}
+.code-card > .code { margin: 0 var(--nv-space-4) var(--nv-space-4); }
+.code .k { color: var(--nv-color-accent-text); }
+.code .c { color: var(--nv-color-text-tertiary); }
+.code .s { color: var(--nv-color-success-text); }
+
+/* --- Files and keys ------------------------------------------------------------ */
+.fmt { display: grid; gap: var(--nv-space-2); }
+kbd {
+  display: inline-block;
+  padding: var(--nv-space-0-5) var(--nv-space-2);
+  border-radius: var(--nv-radius-sm);
+  background: var(--nv-color-surface-elevated);
+  background-image: var(--nv-sheen-raised);
+  box-shadow: var(--nv-bevel), var(--nv-outline), var(--nv-elevation-1);
+  font: var(--nv-font-code);
+  white-space: nowrap;
+}
+
+/* --- Downloads ----------------------------------------------------------------- */
+.downloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: var(--nv-space-5);
+  margin-block-end: var(--nv-space-8);
+}
+.download .nv-card__body { display: grid; gap: var(--nv-space-2); }
+.download__file { overflow-wrap: anywhere; }
+
+/* --- Footer -------------------------------------------------------------------- */
+.footer {
+  display: flex;
+  gap: var(--nv-space-4);
+  align-items: center;
+  padding-block: var(--nv-space-12);
+  border-block-start: var(--nv-border-width) solid var(--nv-color-border-subtle);
+}
+.footer__logo { inline-size: var(--nv-space-12); block-size: var(--nv-space-12); }

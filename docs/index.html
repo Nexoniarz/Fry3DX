@@ -9,76 +9,162 @@
   <meta property="og:description" content="A 3D modeller that does what you'd expect. Pick a tool, click, drag.">
   <meta property="og:image" content="img/model.webp">
   <link rel="icon" href="img/icon.png">
-  <link rel="stylesheet" href="style.css">
+
+  <!-- The look is Niveus (github.com/Nexoniarz/niveus), the same as the app's. site.css is only
+       layout: no colours, shadows or type sizes of its own. -->
+  <link rel="stylesheet" href="niveus/niveus.css">
+  <script src="niveus/niveus.js" defer></script>
+  <link rel="stylesheet" href="site.css">
+  <script>
+    // The saved appearance before the first paint, so the page never flashes the wrong one.
+    try {
+      const t = localStorage.getItem("fry-theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
+  <style>:root { --nv-brand: #ff7828; }</style>
 </head>
 <body>
   <!-- The page is built from content.js by site.js: edit content.js to update it. -->
-  <header class="top">
-    <a class="brand" href="#"><img src="img/logo.svg" alt=""><span>Fry3DX</span></a>
-    <nav>
-      <a href="#features">Features</a>
-      <a href="#look">Look</a>
-      <a href="#get">Get it</a>
-      <a href="#versions">Versions</a>
-      <a class="gh" id="gh-top" href="#">GitHub</a>
-    </nav>
-  </header>
+  <nav class="nv-nav" id="top-nav" aria-label="Main">
+    <a class="nv-nav__brand" href="#top"><img class="brand-logo" src="img/logo.svg" alt=""> Fry3DX</a>
+    <ul class="nv-nav__list nav-links">
+      <li><a class="nv-nav__item" href="#features">Features</a></li>
+      <li><a class="nv-nav__item" href="#look">Look</a></li>
+      <li><a class="nv-nav__item" href="#scripting">Scripting</a></li>
+      <li><a class="nv-nav__item" href="#get">Get it</a></li>
+      <li><a class="nv-nav__item" href="#versions">Versions</a></li>
+    </ul>
+    <span class="nv-nav__spacer"></span>
+    <div class="nv-button-group theme-switch" role="group" aria-label="Appearance">
+      <button class="nv-button nv-button--sm" data-nv-theme="light" aria-pressed="false">Light</button>
+      <button class="nv-button nv-button--sm" data-nv-theme="dark" aria-pressed="false">Dark</button>
+      <button class="nv-button nv-button--sm" data-nv-theme="system" aria-pressed="true">Auto</button>
+    </div>
+    <a class="nv-button nv-button--sm nv-button--ghost" id="gh-top" href="#">GitHub</a>
+    <a class="nv-button nv-button--sm nv-button--primary" href="#get">Download</a>
+  </nav>
 
-  <main>
-    <section class="hero">
-      <div class="hero-text">
-        <p class="kicker" id="long"></p>
-        <h1 id="tagline"></h1>
-        <p class="lead" id="intro"></p>
-        <div class="buttons">
-          <a class="btn hot" href="#get">Get Fry3DX</a>
-          <a class="btn" id="gh-hero" href="#">Source on GitHub</a>
+  <main id="top">
+    <header class="shell hero">
+      <div class="hero__copy">
+        <span class="nv-badge nv-badge--accent"><span class="nv-badge__dot"></span><span id="latest"></span></span>
+        <p class="nv-overline" id="long"></p>
+        <h1 class="nv-display hero__title" id="tagline"></h1>
+        <p class="nv-prose nv-text-secondary" id="intro"></p>
+        <div class="nv-cluster">
+          <a class="nv-button nv-button--primary nv-button--lg" href="#get">Get Fry3DX</a>
+          <a class="nv-button nv-button--lg" id="gh-hero" href="#">Source on GitHub</a>
+        </div>
+        <div class="nv-cluster nv-cluster--tight" id="platforms"></div>
+      </div>
+      <div class="nv-bed hero__bed">
+        <div class="nv-window app-window">
+          <div class="nv-window__titlebar">
+            <div class="nv-window__controls">
+              <span class="nv-window__control nv-window__control--close" aria-hidden="true"></span>
+              <span class="nv-window__control nv-window__control--minimize" aria-hidden="true"></span>
+              <span class="nv-window__control nv-window__control--zoom" aria-hidden="true"></span>
+            </div>
+            <span class="nv-window__title">Fry3DX — kitchen.fry</span>
+          </div>
+          <img class="app-window__shot" src="img/model.webp" alt="Fry3DX with a table, chair, barrel and crate">
         </div>
       </div>
-      <figure class="hero-shot"><img src="img/model.webp" alt="Fry3DX with a table, chair, barrel and crate"></figure>
-    </section>
+    </header>
 
-    <section class="why" id="why"></section>
-
-    <section id="features">
-      <h2>What it does</h2>
-      <div class="grid" id="feature-grid"></div>
-    </section>
-
-    <section id="look">
-      <h2>How it looks</h2>
-      <div class="tabs" id="shot-tabs" role="tablist"></div>
-      <figure class="shot"><img id="shot-img" alt=""><figcaption id="shot-text"></figcaption></figure>
-    </section>
-
-    <section class="two">
-      <div>
-        <h2>Files</h2>
-        <div id="formats"></div>
-      </div>
-      <div>
-        <h2>Keys that make sense</h2>
-        <table class="keys" id="keys"></table>
+    <section class="shell section">
+      <div class="nv-card nv-card--inset why">
+        <div class="nv-card__body nv-stack">
+          <h2 class="nv-heading" id="why-title"></h2>
+          <div class="nv-prose nv-stack" id="why-text"></div>
+        </div>
       </div>
     </section>
 
-    <section id="get">
-      <h2>Get it</h2>
+    <section class="shell section" id="features">
+      <div class="section__head">
+        <span class="nv-overline">What it does</span>
+        <h2 class="nv-heading">The useful parts of the big modellers, without the hundred menus.</h2>
+      </div>
+      <div class="features" id="feature-grid"></div>
+    </section>
+
+    <section class="shell section" id="look">
+      <div class="section__head">
+        <span class="nv-overline">How it looks</span>
+        <h2 class="nv-heading">Five tabs: what you're doing, not where it's hidden.</h2>
+      </div>
+      <div class="nv-nav-tabs" role="tablist" aria-label="Screenshots" id="shot-tabs" data-nv-tabs></div>
+      <div id="shot-panels" class="shots"></div>
+    </section>
+
+    <section class="shell section" id="scripting" hidden>
+      <div class="split">
+        <div class="section__head">
+          <span class="nv-overline">Scripting</span>
+          <h2 class="nv-heading" id="script-title"></h2>
+          <p class="nv-prose nv-text-secondary" id="script-text"></p>
+          <ul class="ticks" id="script-points"></ul>
+        </div>
+        <div class="nv-card nv-card--elevated code-card">
+          <div class="nv-card__header code-card__head">
+            <span class="nv-overline" id="script-file"></span>
+            <button class="nv-button nv-button--sm nv-button--ghost" data-copy="script-code">Copy</button>
+          </div>
+          <pre class="code" id="script-code"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell section split">
+      <div class="nv-card">
+        <div class="nv-card__header"><h2 class="nv-card__title">Files</h2></div>
+        <div class="nv-card__body nv-stack" id="formats"></div>
+      </div>
+      <div class="nv-card">
+        <div class="nv-card__header"><h2 class="nv-card__title">Keys that make sense</h2></div>
+        <div class="nv-table-frame"><table class="nv-table nv-table--compact"><tbody id="keys"></tbody></table></div>
+      </div>
+    </section>
+
+    <section class="shell section" id="get">
+      <div class="section__head">
+        <span class="nv-overline">Get it</span>
+        <h2 class="nv-heading">Free, open source, for the computer you've got.</h2>
+      </div>
       <div class="downloads" id="downloads"></div>
-      <p id="build-text"></p>
-      <div class="code"><button class="copy" id="copy">Copy</button><pre id="build-steps"></pre></div>
-      <p class="muted" id="build-needs"></p>
+      <div class="nv-card nv-card--inset build">
+        <div class="nv-card__body nv-stack">
+          <p class="nv-body" id="build-text"></p>
+          <div class="code-card">
+            <div class="code-card__head">
+              <span class="nv-overline">Terminal</span>
+              <button class="nv-button nv-button--sm nv-button--ghost" data-copy="build-steps">Copy</button>
+            </div>
+            <pre class="code" id="build-steps"></pre>
+          </div>
+          <p class="nv-caption nv-text-tertiary" id="build-needs"></p>
+        </div>
+      </div>
     </section>
 
-    <section id="versions">
-      <h2>Versions</h2>
-      <div id="version-list"></div>
+    <section class="shell section" id="versions">
+      <div class="section__head">
+        <span class="nv-overline">Versions</span>
+        <h2 class="nv-heading">What's new</h2>
+      </div>
+      <div class="nv-disclosure-group" id="version-list"></div>
     </section>
   </main>
 
-  <footer>
-    <p>Fry3DX, made by <a id="author" href="#"></a>.</p>
-    <p class="muted">Open source under the Apache License 2.0 · Sky pictures from Poly Haven (CC0) · Fonts: Inter, JetBrains Mono (OFL).</p>
+  <footer class="shell footer">
+    <img class="footer__logo" src="img/logo.svg" alt="">
+    <div class="nv-stack nv-stack--tight">
+      <p class="nv-body">Fry3DX, made by <a id="author" href="#"></a>.</p>
+      <p class="nv-caption nv-text-tertiary">Open source under the Apache License 2.0 · Sky pictures from Poly Haven (CC0) ·
+        Fonts: Instrument Sans, JetBrains Mono (OFL) · Look: <a href="https://github.com/Nexoniarz/niveus">Niveus</a>.</p>
+    </div>
   </footer>
 
   <script src="content.js"></script>
