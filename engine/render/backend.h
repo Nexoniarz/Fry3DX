@@ -53,7 +53,8 @@ struct DrawData { // DRAW_FIELDS in model.glsl
     glm::vec4 cube[6];
     glm::vec4 params; // x = sun visibility, y = lit by probes, z = liquid cut, w = LiquidStyle
     glm::vec4 plane;  // liquid surface
-    glm::vec4 probe;  // the nearest reflection probe: x = its texture (0 = none), y = its top level; z = time (s)
+    glm::vec4 probe;  // the nearest reflection probe: x = its texture (0 = none), y = its top level; z = time (s);
+                      // w = its own surface without a material map: 0 none, else 1 + metal (0..255) + rough (0..255) * 256
 };
 struct FrameData { // FRAME_FIELDS in model.glsl, then (Vulkan) four buffer addresses
     glm::mat4 cascades[4];

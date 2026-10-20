@@ -32,6 +32,31 @@ glm::mat4 objectMatrix(const Object& o) {
     return glm::translate(glm::mat4(1.0f), o.position) * glm::mat4_cast(o.rotation) * glm::scale(glm::mat4(1.0f), o.scale);
 }
 
+const std::vector<MaterialPreset>& materialPresets() {
+    static const std::vector<MaterialPreset> list = {
+        {"matte", "Matte (its colour)", {}, 0.0f, 0.9f, true},       {"satin", "Satin (its colour)", {}, 0.0f, 0.45f, true},
+        {"glossy", "Glossy (its colour)", {}, 0.0f, 0.12f, true},    {"plastic", "White plastic", {0.9f, 0.9f, 0.88f}, 0.0f, 0.35f},
+        {"rubber", "Black rubber", {0.08f, 0.08f, 0.08f}, 0.0f, 0.95f}, {"wood", "Wood", {0.62f, 0.42f, 0.26f}, 0.0f, 0.7f},
+        {"clay", "Clay", {0.72f, 0.4f, 0.28f}, 0.0f, 0.95f},         {"ceramic", "Ceramic", {0.95f, 0.95f, 0.93f}, 0.0f, 0.08f},
+        {"concrete", "Concrete", {0.6f, 0.6f, 0.58f}, 0.0f, 1.0f},   {"steel", "Brushed steel", {0.75f, 0.76f, 0.77f}, 1.0f, 0.4f},
+        {"chrome", "Chrome", {0.95f, 0.95f, 0.96f}, 1.0f, 0.04f},    {"aluminium", "Aluminium", {0.91f, 0.92f, 0.92f}, 1.0f, 0.3f},
+        {"gold", "Gold", {1.0f, 0.78f, 0.34f}, 1.0f, 0.18f},         {"copper", "Copper", {0.96f, 0.64f, 0.54f}, 1.0f, 0.25f},
+        {"brass", "Brass", {0.89f, 0.75f, 0.42f}, 1.0f, 0.3f},       {"iron", "Cast iron", {0.3f, 0.3f, 0.31f}, 1.0f, 0.75f},
+    };
+    return list;
+}
+
+const MaterialPreset* findMaterial(std::string_view id) {
+    for (const MaterialPreset& m : materialPresets())
+        if (id == m.id) return &m;
+    return nullptr;
+}
+
+void applyMaterial(Object& o, const MaterialPreset& m) {
+    if (!m.keepColor) o.color = m.color;
+    o.metal = m.metal, o.rough = m.rough;
+}
+
 Mesh finishedMesh(const Object& o, bool mirrorOnly) {
     Mesh m = o.mesh;
     for (int axis = 0; axis < 3; ++axis) {

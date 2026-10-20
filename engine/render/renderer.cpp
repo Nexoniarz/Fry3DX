@@ -222,7 +222,7 @@ void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float widt
 }
 
 void Renderer::drawModel(ModelId model, const glm::mat4& transform, const glm::vec4& tint, const std::vector<glm::mat4>* skin,
-                         const ModelLighting* lighting, bool castShadow, const glm::vec4* liquidPlane, LiquidStyle liquid) {
+                         const ModelLighting* lighting, bool castShadow, const glm::vec4* liquidPlane, LiquidStyle liquid, const Surface* surface) {
     if (!model.valid() || packet_.draws.size() >= kMaxDraws) return;
     ModelDraw d{model.index, transform, tint};
     d.castShadow = castShadow || shadowOnly_;
@@ -261,6 +261,8 @@ void Renderer::drawModel(ModelId model, const glm::mat4& transform, const glm::v
     }
     static const auto t0 = std::chrono::steady_clock::now(); // water's waves move with this
     dd.probe.z = hasClock_ ? float(std::fmod(clock_, 3600.0)) : std::fmod(std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count(), 3600.0f);
+    if (surface)
+        dd.probe.w = 1.0f + std::round(std::clamp(surface->metal, 0.0f, 1.0f) * 255.0f) + std::round(std::clamp(surface->rough, 0.0f, 1.0f) * 255.0f) * 256.0f;
     packet_.draws.push_back(dd);
     if (skin && mdl.skinned && packet_.joints.size() + skin->size() <= kMaxJointsPerFrame) {
         d.firstJoint = uint32_t(packet_.joints.size());

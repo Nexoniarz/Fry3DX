@@ -57,6 +57,11 @@ int main() {
     CHECK(!r.ok, "no io");
     r = runScript(host, "local o = fry.add('cube')\nlocal n = #o:points()\nlocal p = o:points()\nfor i = 1, n do p[i].z = p[i].z * 2 end\no:setpoints(p)\nlocal lo, hi = o:bounds()\nprint(hi.z - lo.z)");
     CHECK(r.ok && out.find("\n2.0\n") != std::string::npos, "points round-trip (%s)", r.error.c_str());
+    r = runScript(host, "local o = fry.add('cube')\no.material = 'Gold'\nlocal m = fry.add('cube', {color = '#102030', material = 'glossy'})\nprint(#fry.materials())");
+    CHECK(r.ok && scene.objects.back().metal == 0.0f && scene.objects.back().rough < 0.2f && scene.objects.back().color.r < 0.1f, "a material keeping its colour (%s)", r.error.c_str());
+    CHECK(scene.objects[scene.objects.size() - 2].metal == 1.0f && scene.objects[scene.objects.size() - 2].color.g > 0.7f, "gold");
+    r = runScript(host, "fry.add('cube').material = 'cheese'");
+    CHECK(!r.ok && r.error.find("no material called cheese") != std::string::npos, "an unknown material is an error");
     r = runScript(host, "fry.clear()");
     CHECK(r.ok && scene.objects.empty() && active == 0 && selected.empty(), "clear");
 

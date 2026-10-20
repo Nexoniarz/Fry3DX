@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fry {
@@ -127,6 +128,19 @@ struct Scene {
     std::vector<Reference> references;
     uint32_t nextId = 1;
 };
+
+// Materials to start from: a colour (unless `keepColor`: only how metal and rough it is) and
+// how metal and rough. Shown in the view (Solid and Rendered) and exported with the object.
+struct MaterialPreset {
+    const char* id;   // as scripts name it
+    const char* name; // as shown
+    glm::vec3 color;  // sRGB
+    float metal, rough;
+    bool keepColor = false;
+};
+const std::vector<MaterialPreset>& materialPresets();
+const MaterialPreset* findMaterial(std::string_view id);
+void applyMaterial(Object& o, const MaterialPreset& m);
 
 glm::mat4 objectMatrix(const Object& o);
 // A turn as degrees about X, then Y, then Z (what the Properties panel shows), and back.

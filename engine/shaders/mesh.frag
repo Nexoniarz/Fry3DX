@@ -159,6 +159,10 @@ void main() {
         n = normalize(tbn * vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0))));
         metal = m.z;
         gloss = m.w;
+    } else if (DRAW.probe.w > 0.5) { // the model's own surface (Renderer::Surface)
+        uint s = uint(DRAW.probe.w - 0.5);
+        metal = float(s & 255u) / 255.0;
+        gloss = 1.0 - float((s >> 8) & 255u) / 255.0;
     }
     // Weather: how open to the sky this spot is (the lightmap's sky map; moving things: their
     // sun visibility), then rain wetting it (darker, glossy) and snow lying on what faces up.

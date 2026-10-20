@@ -4576,7 +4576,8 @@ private:
             for (const Object& o : scene_.objects) {
                 if (!o.visible) continue;
                 const glm::vec4 tint = painted(o) ? glm::vec4(1.0f) : glm::vec4(glm::pow(o.color, glm::vec3(2.2f)), 1.0f); // (colours are picked as seen: sRGB)
-                r.drawModel(modelOf(o), toUnits * objectMatrix(o), tint, nullptr, &light, rendered);
+                const keel::Surface surface{o.metal, o.rough};
+                r.drawModel(modelOf(o), toUnits * objectMatrix(o), tint, nullptr, &light, rendered, nullptr, keel::LiquidStyle::None, &surface);
             }
         // Rendered: a ground to stand on and catch the shadows (not part of what you make).
         if (rendered && look.ground) {
@@ -5710,6 +5711,7 @@ private:
         if (ImGui::Button("Save a picture (F12)", ImVec2(w, 0))) dialog(5);
         if (Object* o = selected_.size() == 1 ? find(active_) : nullptr) {
             ImGui::SeparatorText(o->name.c_str());
+            materialPicker(*o);
             undoable([&] { return ImGui::ColorEdit3("Colour", &o->color.x); });
             undoable([&] { return ImGui::SliderFloat("Metal", &o->metal, 0, 1); });
             undoable([&] { return ImGui::SliderFloat("Rough", &o->rough, 0, 1); });
@@ -5916,6 +5918,7 @@ private:
         const glm::vec3 lo = boundsMin(shownMesh(*o)) * glm::abs(o->scale), hi = boundsMax(shownMesh(*o)) * glm::abs(o->scale);
         ImGui::TextDisabled("%.3f x %.3f x %.3f m", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
         ImGui::SeparatorText("Look");
+        materialPicker(*o);
         undoable([&] { return ImGui::ColorEdit3("Colour", &o->color.x); });
         undoable([&] { return ImGui::SliderFloat("Metal", &o->metal, 0, 1); });
         undoable([&] { return ImGui::SliderFloat("Rough", &o->rough, 0, 1); });
@@ -5968,6 +5971,31 @@ private:
         ImGui::SameLine(0, 6);
         if (ImGui::Button("Delete", ImVec2(-1, 0))) deleteSelected();
         ImGui::End();
+    }
+
+    // A material to start from: sets colour, metal and rough in one go (each a little ball of it).
+    void materialPicker(Object& o) {
+        const MaterialPreset* now = nullptr;
+        for (const MaterialPreset& m : materialPresets())
+            if (std::abs(m.metal - o.metal) < 0.01f && std::abs(m.rough - o.rough) < 0.01f && (m.keepColor || glm::all(glm::lessThan(glm::abs(m.color - o.color), glm::vec3(0.01f))))) now = &m;
+        ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+        if (!ImGui::BeginCombo("Material", now ? now->name : "(its own)", ImGuiComboFlags_HeightLarge)) return;
+        for (const MaterialPreset& m : materialPresets()) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetTextLineHeight();
+            ImGui::PushID(m.id);
+            if (ImGui::Selectable("##m", now == &m, 0, ImVec2(0, h))) pushUndo(), applyMaterial(o, m), touched(o.id);
+            ImGui::PopID();
+            // A ball: its colour, darker round the edge, a highlight as sharp as it's smooth.
+            const glm::vec3 c = m.keepColor ? o.color : m.color;
+            const ImVec2 mid(p.x + h * 0.5f, p.y + h * 0.5f);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddCircleFilled(mid, h * 0.45f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r * 0.55f, c.g * 0.55f, c.b * 0.55f, 1)));
+            dl->AddCircleFilled(ImVec2(mid.x - h * 0.05f, mid.y - h * 0.05f), h * 0.36f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, 1)));
+            dl->AddCircleFilled(ImVec2(mid.x - h * 0.14f, mid.y - h * 0.14f), h * (0.06f + 0.1f * m.rough), IM_COL32(255, 255, 255, int(230 * (1.0f - m.rough * 0.8f))));
+            dl->AddText(ImVec2(p.x + h * 1.4f, p.y), ImGui::GetColorU32(ImGuiCol_Text), m.name);
+        }
+        ImGui::EndCombo();
     }
 
     void editProperties(Object& o, float w) {

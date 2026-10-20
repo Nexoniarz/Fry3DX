@@ -25,6 +25,11 @@ struct Camera {
 };
 
 // Baked light for a moving model (from the map's probes): ambient cube + sun visibility.
+// A whole model's surface where it has no material map: how metal (0..1) and how rough (0..1).
+struct Surface {
+    float metal = 0.0f, rough = 0.85f;
+};
+
 struct ModelLighting {
     glm::vec3 cube[6]; // light arriving from +X -X +Y -Y +Z -Z
     float sunVisibility = 1.0f;
@@ -98,7 +103,7 @@ public:
     // lighting: probe light for moving things (nullptr = lightmap or simple sun shading).
     void drawModel(ModelId model, const glm::mat4& transform, const glm::vec4& tint = glm::vec4(1.0f),
                    const std::vector<glm::mat4>* skin = nullptr, const ModelLighting* lighting = nullptr, bool castShadow = true,
-                   const glm::vec4* liquidPlane = nullptr, LiquidStyle liquid = LiquidStyle::None);
+                   const glm::vec4* liquidPlane = nullptr, LiquidStyle liquid = LiquidStyle::None, const Surface* surface = nullptr);
     // liquidPlane (world space: xyz normal, w distance): draws a closed mesh as liquid filling it
     // up to the plane — above it is cut away, and its back faces show as the flat surface.
     // Alpha below 1 (tint × material) makes a submesh translucent: sorted, blended, after opaque.

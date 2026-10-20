@@ -202,6 +202,10 @@ bool setProperty(lua_State* L, Object& o, const std::string& k, int v) {
     else if (k == "mirror") {
         const std::string s = lower(luaL_checkstring(L, v));
         o.mirror = (s.find('x') != std::string::npos ? 1 : 0) | (s.find('y') != std::string::npos ? 2 : 0) | (s.find('z') != std::string::npos ? 4 : 0);
+    } else if (k == "material") {
+        const MaterialPreset* m = findMaterial(lower(luaL_checkstring(L, v)));
+        if (!m) luaL_error(L, "there's no material called %s (fry.materials() lists them)", lua_tostring(L, v));
+        else applyMaterial(o, *m);
     } else if (k == "round") o.round = std::max(0.0f, float(luaL_checknumber(L, v)));
     else if (k == "round_steps") o.roundSteps = std::clamp(int(luaL_checkinteger(L, v)), 1, 12);
     else if (k == "smooth_levels") o.smoothLevels = std::clamp(int(luaL_checkinteger(L, v)), 0, 4);
@@ -640,6 +644,12 @@ int fryShapes(lua_State* L) {
     }
     return 1;
 }
+int fryMaterials(lua_State* L) { // fry.materials(): every material's name, for o.material = ...
+    lua_newtable(L);
+    int i = 0;
+    for (const MaterialPreset& m : materialPresets()) lua_pushstring(L, m.id), lua_rawseti(L, -2, ++i);
+    return 1;
+}
 int fryLook(lua_State* L) { // fry.look{sun_turn = 40, sky = false, ...}; returns the look as it is
     Look& k = scene(L).look;
     struct Num {
@@ -696,7 +706,7 @@ int fryHelp(lua_State* L) {
 
 const luaL_Reg kFry[] = {
     {"add", fryAdd},       {"mesh", fryMesh},         {"lathe", fryLathe}, {"extrude", fryExtrude}, {"objects", fryObjects}, {"find", fryFind},
-    {"selected", frySelected}, {"select", frySelect}, {"clear", fryClear},  {"group", fryGroup},     {"shapes", fryShapes},   {"look", fryLook},
+    {"selected", frySelected}, {"select", frySelect}, {"clear", fryClear},  {"group", fryGroup},     {"shapes", fryShapes},   {"look", fryLook}, {"materials", fryMaterials},
     {"vec", fryVec},       {"say", fryPrint},         {"frame", fryFrame}, {"help", fryHelp},       {nullptr, nullptr},
 };
 
@@ -781,6 +791,7 @@ const char* scriptHelp() {
 
 fry.add(shape, {setting = value, property = value, ...})   a library shape: fry.add("cube", {width = 2, color = "#ff8000"})
 fry.shapes()                     every shape: {id, name, settings}
+fry.materials()                  every material's name, for o.material
 fry.mesh(points, faces, name)    your own: points {{x,y,z}, ...}, faces {{1,2,3,4}, ...} (counter-clockwise from outside)
 fry.lathe(profile, sides, name)  a profile of {out, up} points turned round the Z axis (bottles, vases, bowls)
 fry.extrude(outline, height, name)  an outline of {x, y} points on the ground, made that tall
@@ -792,6 +803,7 @@ fry.frame()  fry.say(text)  print(...)  fry.help()
 
 An object (o):
   o.name  o.position  o.turn  o.size  o.color  o.metal  o.rough  o.smooth  o.visible  o.locked
+  o.material = "gold"  sets colour, metal and rough ("matte", "satin", "glossy" keep the colour)
   o.mirror ("x", "xy"...)  o.round  o.round_steps  o.smooth_levels   (finishing touches, not baked)
   o.width, o.sides ... a library shape's own settings, changeable until its shape is changed by hand
   o.id  o.shape  o.point_count  o.face_count   (to read)
