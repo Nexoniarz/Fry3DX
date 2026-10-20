@@ -362,6 +362,42 @@ int main() {
         CHECK(combine(a, drill, Combine::Subtract) && checkForPrint(a).closed() && checkForPrint(a).volume < 1.0f && checkForPrint(a).volume > 0.85f,
               "a cylinder drilled through a cube: closed, %g m3", checkForPrint(a).volume);
     }
+    // Shapes drawn and cut in, again and again inside the last cut, on a turned object (the shape
+    // carried into its own space, as the Draw tool does). This once built its tree forever and
+    // crashed; and the cutting's rounding left small gaps.
+    {
+        uint32_t seed = 12345;
+        auto rnd = [&] { return (seed = seed * 1664525u + 1013904223u) / 4294967296.0f * 2 - 1; }; // (the same everywhere: -1..1)
+        int cuts = 0, sealedCuts = 0;
+        for (int run = 0; run < 12; ++run) {
+            Mesh m = makeCube(1.0f);
+            const glm::vec3 axis = glm::normalize(glm::vec3(rnd(), rnd(), rnd() + 2));
+            const glm::mat4 M = glm::translate(glm::mat4(1), glm::vec3(rnd(), rnd(), 0.5f)) * glm::rotate(glm::mat4(1), rnd() * 3, axis);
+            float top = 0.5f; // (the floor of the last cut, the object's own space)
+            for (int k = 0; k < 5; ++k) {
+                const glm::vec3 P = glm::vec3(M * glm::vec4(rnd() * 0.03f, rnd() * 0.03f, top, 1)), N = glm::normalize(glm::mat3(M) * glm::vec3(0, 0, 1));
+                const glm::vec3 X = glm::normalize(glm::cross(N, glm::vec3(0.3f, 0.2f, 0.9f))), Y = glm::cross(N, X);
+                const int corners = 3 + k % 4;
+                const float r = 0.25f - 0.04f * float(k);
+                std::vector<glm::vec3> pts;
+                glm::vec3 c(0.0f);
+                for (int i = 0; i < corners; ++i) {
+                    const float t = 6.2831f * float(i) / float(corners) + rnd() * 0.3f;
+                    pts.push_back(P + X * std::cos(t) * r + Y * std::sin(t) * r), c += pts.back();
+                }
+                c /= float(corners);
+                for (glm::vec3& q : pts) q -= c;
+                const float thick = 0.05f + 0.0002f;
+                Mesh shape = extrudeOutline(pts, N, thick);
+                transform(shape, glm::inverse(M) * glm::translate(glm::mat4(1), c + N * (0.0001f - thick / 2)));
+                Mesh was = m;
+                if (!combine(m, shape, Combine::Subtract)) m = was;
+                ++cuts, sealedCuts += checkForPrint(m).closed();
+                top -= 0.05f;
+            }
+        }
+        CHECK(sealedCuts >= cuts - 2, "cuts drawn inside cuts: no crash, %d of %d closed after", sealedCuts, cuts);
+    }
     // An edge's ring: across a cube's side, the four edges going round it.
     {
         const Mesh c = makeCube(1.0f);

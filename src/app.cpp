@@ -316,6 +316,7 @@ public:
         }, "Fry3DX: fry_orbit yaw pitch [distance]");
         // A sculpt stroke across the view (0..1 of it), for pictures of it: brush 1-6, then from and to.
         static keel::Cmd sculptStroke("fry_sculpt", [](const keel::Args& a) {
+            if (!self->viewReady()) return self->say("fry_sculpt: the view isn't up yet (+wait 1 first)");
             if (a.size() < 6) return;
             const int brush = std::clamp(std::stoi(a[1]) - 1, 0, int(std::size(kSculptTools)) - 1);
             self->sculptBrush_ = kSculptTools[brush].brush;
@@ -390,6 +391,7 @@ public:
         };
         static auto vp = viewPoint;
         static keel::Cmd knife("fry_knife", [](const keel::Args& a) {
+            if (!self->viewReady()) return self->say("fry_knife: the view isn't up yet (+wait 1 first)");
             if (a.size() < 5) return;
             if (a.size() > 5) self->knifeThrough_ = a[5] != "0";
             if (a.size() > 6) self->knifeAfter_ = std::stoi(a[6]);
@@ -432,6 +434,7 @@ public:
         static keel::Cmd panelsCmd("fry_panels", [](const keel::Args&) { self->panelsOpen_ = !self->panelsOpen_; }, "Fry3DX: phone layout: show / hide the panels");
         static keel::Cmd goCmd("fry_goto", [](const keel::Args&) { self->goTo(self->selected_); }, "Fry3DX: the camera to the picked");
         static keel::Cmd drawCmd("fry_draw", [](const keel::Args& a) { // fry_draw mode thick x y x y x y ... (view 0..1)
+            if (!self->viewReady()) return self->say("fry_draw: the view isn't up yet (+wait 1 first)");
             if (a.size() < 9) return;
             self->setTool(Tool::Draw);
             self->drawOnMode_ = std::stoi(a[1]), self->drawThickness_ = std::stof(a[2]);
@@ -469,6 +472,7 @@ public:
             if (a.size() > 3) self->paintColor_ = {std::stof(a[1]), std::stof(a[2]), std::stof(a[3]), 1.0f};
         }, "Fry3DX: fry_color r g b (painting, 0..1)");
         static keel::Cmd stroke("fry_stroke", [](const keel::Args& a) {
+            if (!self->viewReady()) return self->say("fry_stroke: the view isn't up yet (+wait 1 first)");
             if (a.size() < 5) return;
             const ImVec2 p0 = vp(a[1], a[2]), p1 = vp(a[3], a[4]);
             for (int i = 0; i <= 40; ++i) self->paintAt(ImVec2(p0.x + (p1.x - p0.x) * float(i) / 40, p0.y + (p1.y - p0.y) * float(i) / 40), i == 0);
@@ -488,6 +492,7 @@ public:
             if (const int i = self->owner_[o->id][size_t(y) * size_t(o->picture->w) + size_t(x)]; i > 0) self->unlockLayer(o->id, i - 1);
         }, "Fry3DX: fry_unlock x y: click the Picture panel there (picture pixels)");
         static keel::Cmd moveSticker("fry_sticker", [](const keel::Args& a) {
+            if (!self->viewReady()) return self->say("fry_sticker: the view isn't up yet (+wait 1 first)");
             Object* o = self->find(self->ledit_.object);
             PictureLayer* l = self->editLayer();
             if (!o || !l || a.size() < 3) return;
@@ -527,6 +532,7 @@ public:
             if (a[1] == "middle") self->middleOfBed();
             if (a[1] == "printer" && a.size() > 2) keel::execute("fry_printer " + a[2]);
             if (a[1] == "size" && a.size() > 3) self->pushUndo(), self->printResize(std::stoi(a[2]), std::stof(a[3]));
+            if ((a[1] == "measure" || a[1] == "flat") && !self->viewReady()) return self->say("fry_print: the view isn't up yet (+wait 1 first)");
             if (a[1] == "measure" && a.size() > 5) {
                 self->printTool_ = PrintTool::Measure, self->measure_.clear();
                 for (int i = 0; i < 2; ++i)
@@ -638,6 +644,7 @@ public:
         const ImGuiID dock = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         if (touch() && (io.DisplaySize.y > io.DisplaySize.x) != portrait_) portrait_ = !portrait_, layoutDone_ = false; // (the phone turned: its layout)
         if (!layoutDone_) defaultLayout(dock);
+        if (!touch()) keepMinSizes(ImGui::DockBuilderGetNode(dock));
         if (ImGuiDockNode* c = ImGui::DockBuilderGetCentralNode(dock)) viewMin_ = c->Pos, viewMax_ = ImVec2(c->Pos.x + c->Size.x, c->Pos.y + c->Size.y);
         updateCamera(io);
         menuBar();
@@ -681,6 +688,7 @@ private:
         std::set<std::pair<int, int>> edges;
     };
     std::vector<Snapshot> undo_, redo_;
+    std::vector<Snapshot> redoKept_; // (what redo had before the last undo point: back if that step is dropped)
 
     Mode mode_ = Mode::Object;
     Tool tool_ = Tool::Move;
@@ -966,8 +974,19 @@ private:
     void pushUndo() {
         undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
         if (undo_.size() > 200) undo_.erase(undo_.begin());
-        redo_.clear();
+        redoKept_ = std::move(redo_), redo_.clear();
         dirty_ = true, ++edits_;
+    }
+    // The undo point just made, dropped (what it was for didn't happen): redo as it was before.
+    void dropUndo() {
+        if (!undo_.empty()) undo_.pop_back();
+        redo_ = std::move(redoKept_), redoKept_.clear();
+    }
+    // Back to the undo point just made, and it dropped.
+    void takeBack() {
+        if (undo_.empty()) return;
+        restore(undo_.back());
+        dropUndo();
     }
     void restore(Snapshot& s) {
         // (Not the scripts: they're edited like text, not undone with the model.)
@@ -984,12 +1003,14 @@ private:
         redo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
         restore(undo_.back());
         undo_.pop_back();
+        redoKept_.clear();
     }
     void redo() {
         if (redo_.empty()) return say("Nothing to redo");
         undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
         restore(redo_.back());
         redo_.pop_back();
+        redoKept_.clear();
     }
 
     void newScene() {
@@ -1689,7 +1710,7 @@ private:
         pushUndo();
         const auto made = loopCut(o.mesh, edge, cuts_);
         if (made.empty()) {
-            undo_.pop_back();
+            dropUndo();
             return say("Nothing to cut there: loop cuts go across four-sided faces");
         }
         changedShape(o);
@@ -1707,7 +1728,7 @@ private:
         pushUndo();
         const glm::vec3 towards = glm::inverse(glm::mat3(objectMatrix(*o))) * (eye_ - pivotOfSelection());
         if (!makeFace(o->mesh, std::vector<int>(pts.begin(), pts.end()), towards)) {
-            undo_.pop_back();
+            dropUndo();
             return say("Pick 3 or more points (not in a line) to make a face");
         }
         changedShape(*o);
@@ -1771,7 +1792,7 @@ private:
             return say(std::format("Those faces have {} and {} corners: bridging needs as many on each", o->mesh.faces[size_t(a)].size(), o->mesh.faces[size_t(b)].size()));
         pushUndo();
         const std::vector<int> made = bridgeFaces(o->mesh, a, b);
-        if (made.empty()) return undo(), redo_.clear(), say("Couldn't bridge those (they share a point)");
+        if (made.empty()) return takeBack(), say("Couldn't bridge those (they share a point)");
         changedShape(*o);
         selFaces_.insert(made.begin(), made.end());
         say(std::format("Bridged: {} faces between them", made.size()));
@@ -1889,7 +1910,7 @@ private:
         pushUndo();
         const auto made = knifeCut(o->mesh, eye, path, knifeThrough_);
         if (made.empty()) {
-            undo_.pop_back();
+            dropUndo();
             return say(knifeThrough_ ? "The line didn't cross the shape" : "The line didn't cross any face you can see (Tool options: cut right through)");
         }
         clearElements();
@@ -1948,7 +1969,7 @@ private:
         holeTall_ *= across * scale / std::max(holeSize_, 1e-6f), holeSize_ = across * scale;
         if (holeMode_ == 2) { // just the outline: a new face, picked to extrude, bevel or paint
             const int made = imprintOutline(o->mesh, face, outline);
-            if (made < 0) return undo_.pop_back(), say("The outline has to fit inside the face");
+            if (made < 0) return dropUndo(), say("The outline has to fit inside the face");
             changedShape(*o);
             selected_ = {id}, active_ = id;
             if (mode_ != Mode::Edit) enterEdit();
@@ -1956,7 +1977,7 @@ private:
             return say(std::format("{} outline cut, {:.1f} mm across: its new face is picked (Extrude, Bevel, or paint it)", names[holeShape_], holeSize_ * 1000));
         }
         if (!cutHole(o->mesh, face, outline, holeMode_ == 0 ? 0.0f : holeDepth_ / scale)) {
-            undo_.pop_back();
+            dropUndo();
             return say(holeMode_ == 0 ? "The hole has to fit inside the face, and inside the face behind it (it goes through)" : "The hole has to fit inside the face");
         }
         changedShape(*o);
@@ -3270,6 +3291,16 @@ private:
         ImGui::Separator();
         if (ImGui::MenuItem("Delete", "Del")) selected_ = ids, deleteSelected();
     }
+    // A row's show / hide or lock button: the picture of how it is now, dim when it's the usual way.
+    bool rowToggle(const char* id, Icon icon, bool usual, const char* tip) {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetFrameHeight() - 4;
+        const bool pressed = ImGui::InvisibleButton(id, ImVec2(h, h));
+        const ImU32 col = ImGui::IsItemHovered() ? kHot : usual ? IM_COL32(200, 200, 205, 150) : ImGui::GetColorU32(accentText());
+        drawIcon(ImGui::GetWindowDrawList(), icon, ImVec2(at.x + h * 0.1f, at.y + h * 0.1f), h * 0.8f, col);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        return pressed;
+    }
     // The ⌖ button at the end of a row: brings the camera to it.
     bool goButton(const char* tip) {
         const ImVec2 at = ImGui::GetCursorScreenPos();
@@ -3300,11 +3331,9 @@ private:
             ImGui::PushID(int(id) + 1000000);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton(f->visible ? "o" : "-")) showFolder(*f, !f->visible);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(f->visible ? "Hide all in it" : "Show all in it");
+            if (rowToggle("##eye", f->visible ? Icon::Eye : Icon::EyeShut, f->visible, f->visible ? "Hide all in it" : "Show all in it")) showFolder(*f, !f->visible);
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton(f->locked ? "L" : " ")) lockFolder(*f, !f->locked);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(f->locked ? "Unlock all in it" : "Lock all in it");
+            if (rowToggle("##lock", f->locked ? Icon::Lock : Icon::Unlock, !f->locked, f->locked ? "Unlock all in it" : "Lock all in it")) lockFolder(*f, !f->locked);
             ImGui::TableNextColumn();
             ImGui::Indent(indent + 1);
             if (ImGui::ArrowButton("##open", f->open ? ImGuiDir_Down : ImGuiDir_Right)) f->open = !f->open;
@@ -3380,11 +3409,9 @@ private:
             ImGui::PushID(int(o.id));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton(o.visible ? "o" : "-")) o.visible = !o.visible, dirty_ = true;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(o.visible ? "Shown (click to hide)" : "Hidden (click to show)");
+            if (rowToggle("##eye", o.visible ? Icon::Eye : Icon::EyeShut, o.visible, o.visible ? "Shown (click to hide)" : "Hidden (click to show)")) o.visible = !o.visible, dirty_ = true;
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton(o.locked ? "L" : " ")) o.locked = !o.locked, dirty_ = true;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(o.locked ? "Locked: can't be moved or changed" : "Click to lock");
+            if (rowToggle("##lock", o.locked ? Icon::Lock : Icon::Unlock, !o.locked, o.locked ? "Locked: can't be moved or changed (click to unlock)" : "Click to lock")) o.locked = !o.locked, dirty_ = true;
             ImGui::TableNextColumn();
             ImGui::Indent(indent + 1);
             if (renaming_ == o.id) {
@@ -3441,8 +3468,7 @@ private:
             Mesh m = b.hasFinish() ? finishedMesh(b) : b.mesh;
             transform(m, into * objectMatrix(b));
             if (!combine(result, m, op)) {
-                undo();
-                redo_.clear();
+                takeBack();
                 return say(op == Combine::Overlap ? "They don't overlap: nothing would be left" : "That didn't leave anything");
             }
             ++used;
@@ -3774,6 +3800,8 @@ private:
     }
 
     // World point → screen (false behind the eye).
+    // The window and its view are up (commands given at the start run before the first frame).
+    bool viewReady() const { return ImGui::GetCurrentContext() && viewMax_.x - viewMin_.x > 1 && viewMax_.y - viewMin_.y > 1; }
     bool project(const glm::vec3& p, ImVec2& out) const {
         const glm::vec4 c = vp_ * glm::vec4(p, 1.0f);
         if (c.w < 1e-4f) return false;
@@ -3839,38 +3867,64 @@ private:
         return h.t > len - std::max(len * 0.002f, 0.0005f);
     }
     // Which of an object's points the eye can see, worked out again only when it or the view
-    // changes. (Very big meshes: all, rather than slow.)
+    // changes. The triangles are sorted into a grid on the screen first: a point is tried only
+    // against those over its own square (what could be between it and the eye).
     struct Visibility {
         uint64_t version = 0;
         glm::vec3 eye{1e30f};
+        glm::mat4 vp{0.0f};
         std::vector<char> point;
     };
-    std::map<uint32_t, Visibility> visibility_;
-    const std::vector<char>& visiblePoints(const Object& o) {
-        Visibility& v = visibility_[o.id];
+    std::map<std::pair<uint32_t, bool>, Visibility> visibility_; // (an object's own mesh, or the one shown)
+    const std::vector<char>& visiblePoints(const Object& o) { return visiblePoints(o, o.mesh); }
+    const std::vector<char>& visiblePoints(const Object& o, const Mesh& mesh) {
+        Visibility& v = visibility_[{o.id, &mesh != &o.mesh}];
         const uint64_t version = versions_[o.id];
-        if (v.version == version && glm::distance(v.eye, eye_) < 1e-6f && v.point.size() == o.mesh.verts.size()) return v.point;
-        v.version = version, v.eye = eye_;
-        v.point.assign(o.mesh.verts.size(), 1);
+        if (v.version == version && glm::distance(v.eye, eye_) < 1e-6f && v.vp == vp_ && v.point.size() == mesh.verts.size()) return v.point;
+        v.version = version, v.eye = eye_, v.vp = vp_;
+        v.point.assign(mesh.verts.size(), 1);
         const glm::mat4 m = objectMatrix(o);
-        std::vector<glm::vec3> w(o.mesh.verts.size());
-        for (size_t i = 0; i < w.size(); ++i) w[i] = glm::vec3(m * glm::vec4(o.mesh.verts[i], 1.0f));
+        std::vector<glm::vec3> w(mesh.verts.size());
+        std::vector<glm::vec4> clip(w.size());
+        for (size_t i = 0; i < w.size(); ++i) w[i] = glm::vec3(m * glm::vec4(mesh.verts[i], 1.0f)), clip[i] = vp_ * glm::vec4(w[i], 1.0f);
         std::vector<std::array<int, 3>> tris;
-        for (size_t f = 0; f < o.mesh.faces.size(); ++f)
-            for (const auto& t : triangulate(o.mesh, int(f))) tris.push_back(t);
-        if (w.size() * tris.size() > 4'000'000) return v.point;
+        for (size_t f = 0; f < mesh.faces.size(); ++f)
+            for (const auto& t : triangulate(mesh, int(f))) tris.push_back(t);
+        constexpr int G = 64;
+        auto cell = [](float ndc) { return std::clamp(int((ndc * 0.5f + 0.5f) * G), 0, G - 1); };
+        std::vector<std::vector<int>> grid(G * G);
+        std::vector<int> everywhere; // (reaching behind the eye: in every square)
+        for (size_t t = 0; t < tris.size(); ++t) {
+            glm::vec2 lo(1e30f), hi(-1e30f);
+            bool behind = false;
+            for (int k : tris[t]) {
+                const glm::vec4 c = clip[size_t(k)];
+                if (c.w < 1e-5f) { behind = true; break; }
+                lo = glm::min(lo, glm::vec2(c) / c.w), hi = glm::max(hi, glm::vec2(c) / c.w);
+            }
+            if (behind) { everywhere.push_back(int(t)); continue; }
+            if (hi.x < -1 || hi.y < -1 || lo.x > 1 || lo.y > 1) continue; // (off the screen: covers nothing on it)
+            for (int y = cell(lo.y); y <= cell(hi.y); ++y)
+                for (int x = cell(lo.x); x <= cell(hi.x); ++x) grid[size_t(y * G + x)].push_back(int(t));
+        }
         for (size_t i = 0; i < w.size(); ++i) {
+            const glm::vec4 c = clip[i];
+            if (c.w < 1e-5f) continue; // (behind the eye: not drawn anyway)
+            const glm::vec2 n = glm::vec2(c) / c.w;
+            if (std::abs(n.x) > 1 || std::abs(n.y) > 1) continue;
             const glm::vec3 d = w[i] - eye_;
             const float len = glm::length(d);
             const Ray ray{eye_, d / len};
             const float limit = len - std::max(len * 0.002f, 0.0005f);
-            for (const auto& t : tris) {
-                if (t[0] == int(i) || t[1] == int(i) || t[2] == int(i)) continue;
-                if (auto hit = hitTriangle(ray, w[size_t(t[0])], w[size_t(t[1])], w[size_t(t[2])]); hit && *hit < limit) {
-                    v.point[i] = 0;
-                    break;
-                }
-            }
+            auto hides = [&](int t) {
+                const auto& tri = tris[size_t(t)];
+                if (tri[0] == int(i) || tri[1] == int(i) || tri[2] == int(i)) return false;
+                auto hit = hitTriangle(ray, w[size_t(tri[0])], w[size_t(tri[1])], w[size_t(tri[2])]);
+                return hit && *hit < limit;
+            };
+            if (std::any_of(everywhere.begin(), everywhere.end(), hides)) { v.point[i] = 0; continue; }
+            const auto& here = grid[size_t(cell(n.y) * G + cell(n.x))];
+            if (std::any_of(here.begin(), here.end(), hides)) v.point[i] = 0;
         }
         return v.point;
     }
@@ -4281,7 +4335,7 @@ private:
     void cancelDrag() {
         if (!drag_.active) return;
         scene_ = drag_.before;
-        undo_.pop_back();
+        dropUndo();
         touchAll();
         drag_.active = false;
     }
@@ -4461,16 +4515,16 @@ private:
         Mesh m = extrudeOutline(local, n, thick);
         drawPts_.clear();
         if (m.faces.empty()) return say("That shape doesn't work (points on top of each other?)");
+        if (onto && drawOnMode_ > 0 && find(onto)->locked) return say("That object is locked");
         pushUndo();
         if (onto && drawOnMode_ > 0) {
             Object* o = find(onto);
-            if (o->locked) return say("That object is locked");
             if (o->hasFinish()) o->mesh = finishedMesh(*o), o->mirror = 0, o->round = 0, o->smoothLevels = 0;
             Mesh shape = m;
             transform(shape, glm::inverse(objectMatrix(*o)) * glm::translate(glm::mat4(1.0f), c));
             Mesh result = o->mesh;
             if (!combine(result, shape, drawOnMode_ == 2 ? Combine::Subtract : Combine::Add)) {
-                undo(), redo_.clear();
+                takeBack();
                 return say("That would leave nothing");
             }
             o = find(onto);
@@ -5047,8 +5101,10 @@ private:
                     s = (s | facing) + 4;
                 }
             }
+            const std::vector<char>* vis = xray_ ? nullptr : &visiblePoints(o, mesh); // (not the edges of a pocket behind its rim)
             for (auto [e, s] : side) {
                 const bool silhouette = (s & 3) == 3, open = (s >> 2) == 1 && (s & 1);
+                if (vis && !((*vis)[size_t(e.first)] && (*vis)[size_t(e.second)])) continue;
                 ImVec2 a, b;
                 if ((silhouette || open) && project(w[size_t(e.first)], a) && project(w[size_t(e.second)], b)) dl->AddLine(a, b, col, width);
             }
@@ -5301,6 +5357,44 @@ private:
         ImGui::GetStyle().FontScaleDpi = 0.92f; // (the look itself: keel/ui, Niveus)
     }
 
+    // The least a panel can be and still read right (its words, its rows), by the font's size.
+    static ImVec2 panelMin(std::string_view name) {
+        const float f = ImGui::GetFontSize();
+        if (name == "Toolbox") return {15.5f * f, 9 * f};
+        if (name == "Tool options") return {15.5f * f, 8 * f};
+        if (name == "Properties") return {23 * f, 12 * f};
+        if (name == "Layers") return {20 * f, 8 * f};
+        if (name == "Picture") return {18 * f, 14 * f};
+        if (name == "Script") return {30 * f, 16 * f};
+        return {0, 0};
+    }
+    // Docked panels kept at their least size: where a split leaves one side smaller, the split
+    // moves (when the other side has room to give). ImGui's own splitters know only one least
+    // size for everything. Gives what the node needs.
+    ImVec2 keepMinSizes(ImGuiDockNode* n) {
+        if (!n) return {0, 0};
+        if (n->IsLeafNode()) {
+            const float f = ImGui::GetFontSize();
+            ImVec2 need = n->IsCentralNode() ? ImVec2(16 * f, 12 * f) : ImVec2(0, 0);
+            for (ImGuiWindow* w : n->Windows) need = ImMax(need, panelMin(w->Name));
+            if (need.y > 0 && !n->IsCentralNode()) need.y += ImGui::GetFrameHeight(); // (its tab)
+            return need;
+        }
+        ImGuiDockNode *a = n->ChildNodes[0], *b = n->ChildNodes[1];
+        const ImVec2 na = keepMinSizes(a), nb = keepMinSizes(b);
+        if (!a->IsVisible) return nb;
+        if (!b->IsVisible) return na;
+        const int axis = n->SplitAxis;
+        const float gap = ImGui::GetStyle().DockingSeparatorSize, room = n->Size[axis] - gap;
+        float sa = a->Size[axis];
+        if (sa < na[axis] && room - na[axis] >= nb[axis]) sa = na[axis];
+        else if (room - sa < nb[axis] && room - nb[axis] >= na[axis]) sa = room - nb[axis];
+        if (sa != a->Size[axis]) a->SizeRef[axis] = sa, b->SizeRef[axis] = room - sa;
+        ImVec2 need = ImMax(na, nb);
+        need[axis] = na[axis] + nb[axis] + gap;
+        return need;
+    }
+
     void defaultLayout(ImGuiID dock) {
         layoutDone_ = true;
         ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock);
@@ -5328,9 +5422,12 @@ private:
             ImGui::DockBuilderDockWindow("Picture", right);
             return ImGui::DockBuilderFinish(dock);
         }
-        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.14f, nullptr, &center);
+        // (shares of the window, but never less than the panels' least sizes)
+        const float wide = ImGui::GetMainViewport()->WorkSize.x, leftShare = std::min(0.3f, std::max(0.14f, (panelMin("Toolbox").x + 8) / wide));
+        const float rightShare = std::min(0.45f, std::max(0.22f, (panelMin("Properties").x + 8) / (wide * (1 - leftShare))));
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, leftShare, nullptr, &center);
         const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.5f, nullptr, &left);
-        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.22f, nullptr, &center);
+        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightShare, nullptr, &center);
         const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.66f, nullptr, &right);
         const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.04f, nullptr, &center);
         const ImGuiID picture = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.45f, nullptr, &center); // (the Paint tab's)
@@ -5517,22 +5614,27 @@ private:
             menus();
             ImGui::EndMenu();
         }
-        // The tabs: what you're doing.
+        const std::string file = (path_.empty() ? "Untitled" : fileName(path_)) + (dirty_ ? "  *" : "");
+        // The tabs: what you're doing (as wide as there's room for between the menus and the file's
+        // name; the pictures alone when it's tight).
         {
             const char* names[] = {"Model", "Paint", "Layout", "Render", "Print"};
             const Icon icons[] = {Icon::Objects, Icon::PaintBrush, Icon::Layout, Icon::Render, Icon::Print};
             const char* tips[] = {"Make the shape (Ctrl+1)", "Paint pictures onto it (Ctrl+2)", "Change how its picture is laid out: move, turn and size its frames (Ctrl+3)",
                                   "Light it and save pictures of it (Ctrl+4)", "Get it ready for a 3D printer: size, checks, the printer's plate (Ctrl+5)"};
-            const float tw = touch() ? 72.0f : 92.0f;
-            ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 20.0f, (ImGui::GetWindowWidth() - tw * 5 - 16) * 0.5f));
+            const float h = ImGui::GetFrameHeight(), from = ImGui::GetCursorPosX() + 20.0f;
+            const float room = ImGui::GetWindowWidth() - from - (touch() ? 8.0f : ImGui::CalcTextSize(file.c_str()).x + 32.0f);
+            float tw = std::min(touch() ? 72.0f : 92.0f, room / 5 - 4);
+            const bool words = tw >= h + 2 + ImGui::CalcTextSize("Layout").x + 6;
+            if (!words) tw = h + 4;
+            ImGui::SetCursorPosX(std::max(from, std::min((ImGui::GetWindowWidth() - (tw + 4) * 5) * 0.5f, from + room - (tw + 4) * 5)));
             for (int i = 0; i < 5; ++i) {
                 if (i) ImGui::SameLine(0, 4);
                 ImGui::PushID(i);
-                if (wideButton("##tab", icons[i], names[i], int(tab_) == i, tw, tips[i], ImGui::GetFrameHeight())) setTab(Tab(i));
+                if (wideButton("##tab", icons[i], words ? names[i] : "", int(tab_) == i, tw, words ? tips[i] : std::format("{}: {}", names[i], tips[i]).c_str(), h)) setTab(Tab(i));
                 ImGui::PopID();
             }
         }
-        const std::string file = (path_.empty() ? "Untitled" : fileName(path_)) + (dirty_ ? "  *" : "");
         if (touch()) return ImGui::EndMainMenuBar(); // (no room on a phone)
         ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(file.c_str()).x - 16);
         ImGui::TextDisabled("%s", file.c_str());
@@ -5599,6 +5701,7 @@ private:
 
     void toolbox() {
         if (std::exchange(showToolbox_, false)) ImGui::SetNextWindowFocus();
+        ImGui::SetNextWindowSizeConstraints(panelMin("Toolbox"), ImVec2(FLT_MAX, FLT_MAX));
         ImGui::Begin("Toolbox", nullptr, ImGuiWindowFlags_NoCollapse);
         const float w = ImGui::GetContentRegionAvail().x;
         if (tab_ == Tab::Paint) {
@@ -5810,6 +5913,7 @@ private:
         ImGui::TextDisabled("(the wheel while dragging too)");
     }
     void toolOptions() {
+        ImGui::SetNextWindowSizeConstraints(panelMin("Tool options"), ImVec2(FLT_MAX, FLT_MAX));
         ImGui::Begin("Tool options", nullptr, ImGuiWindowFlags_NoCollapse);
         const float w = ImGui::GetContentRegionAvail().x;
         if (tab_ == Tab::Paint) {
@@ -6017,6 +6121,7 @@ private:
     }
 
     void layersPanel() {
+        ImGui::SetNextWindowSizeConstraints(panelMin("Layers"), ImVec2(FLT_MAX, FLT_MAX));
         ImGui::Begin("Layers", nullptr, ImGuiWindowFlags_NoCollapse);
         // Along the top: a new folder, the picked ones into one.
         if (ImGui::SmallButton("+ Folder")) {
@@ -6042,7 +6147,7 @@ private:
                 ImGui::PushID(int(ref.id));
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                if (ImGui::SmallButton(ref.visible ? "o" : "-")) ref.visible = !ref.visible;
+                if (rowToggle("##eye", ref.visible ? Icon::Eye : Icon::EyeShut, ref.visible, ref.visible ? "Shown (click to hide)" : "Hidden (click to show)")) ref.visible = !ref.visible;
                 ImGui::TableNextColumn();
                 ImGui::TableNextColumn();
                 const std::string label = "Picture: " + stdfs::path(ref.path).filename().string();
@@ -6111,8 +6216,7 @@ private:
             PictureLayer& l = o->layers[size_t(i)];
             const bool on = ledit_.object == o->id && ledit_.index == i;
             ImGui::PushID(i);
-            if (ImGui::SmallButton(l.visible ? "o" : "-")) pushUndo(), l.visible = !l.visible;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(l.visible ? "Hide it" : "Show it");
+            if (rowToggle("##eye", l.visible ? Icon::Eye : Icon::EyeShut, l.visible, l.visible ? "Hide it" : "Show it")) pushUndo(), l.visible = !l.visible;
             ImGui::SameLine();
             if (ImGui::Selectable(std::format("{}{}", l.name, on ? "   (moving)" : l.sticker ? "" : "   (flat)").c_str(), on, 0, ImVec2(w - 92, 0)))
                 on ? lockLayer() : unlockLayer(o->id, i);
@@ -6197,6 +6301,7 @@ private:
 
     // The Paint tab's picture: the selected object's, flat, to paint on and place pictures on.
     void picturePanel() {
+        ImGui::SetNextWindowSizeConstraints(panelMin("Picture"), ImVec2(FLT_MAX, FLT_MAX));
         ImGui::Begin("Picture", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         Object* o = selected_.empty() ? nullptr : find(active_);
         if (!o || !o->picture) {
@@ -6314,6 +6419,7 @@ private:
     }
 
     void propertiesPanel() {
+        ImGui::SetNextWindowSizeConstraints(panelMin("Properties"), ImVec2(FLT_MAX, FLT_MAX));
         ImGui::Begin("Properties", nullptr, ImGuiWindowFlags_NoCollapse);
         const float w = ImGui::GetContentRegionAvail().x;
         if (tab_ == Tab::Paint) {
@@ -6707,8 +6813,7 @@ private:
         touchAll();
         if (r.ok && frame) frameAll();
         if (!r.ok) {
-            undo();
-            redo_.clear();
+            takeBack();
             scriptLine(r.error, true);
             showScript_ = true;
             return say(name + " stopped (nothing it did was kept): " + r.error.substr(0, r.error.find('\n')));
@@ -6955,6 +7060,7 @@ private:
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(std::min(780.0f, vp->WorkSize.x * 0.55f), vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(panelMin("Script"), ImVec2(FLT_MAX, FLT_MAX));
         if (!ImGui::Begin("Script", &showScript_)) return ImGui::End();
 
         // The file's scripts (saved in the .fry with it).

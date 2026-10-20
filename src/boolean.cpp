@@ -7,6 +7,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <set>
 
 namespace fry {
 namespace {
@@ -96,18 +97,28 @@ struct Node {
         if (front) front->all(out);
         if (back) back->all(out);
     }
-    void build(const std::vector<Poly>& in) {
+    void build(const std::vector<Poly>& in, int depth = 0) {
         if (in.empty()) return;
-        if (!hasPlane) hasPlane = true, n = in[0].n, w = in[0].w;
+        size_t first = 0;
+        if (!hasPlane) { // (the piece the plane is taken from stays here: a thin sliver's own corners can
+                         // be off its rounded plane, and split by it again and again, forever)
+            hasPlane = true, n = in[0].n, w = in[0].w;
+            polys.push_back(in[0]);
+            first = 1;
+        }
+        if (depth > 3000) { // (a tree this deep is gone wrong: the rest kept here, not a stack overflow)
+            polys.insert(polys.end(), in.begin() + long(first), in.end());
+            return;
+        }
         std::vector<Poly> f, b;
-        for (const Poly& p : in) split(n, w, p, polys, polys, f, b);
+        for (size_t i = first; i < in.size(); ++i) split(n, w, in[i], polys, polys, f, b);
         if (!f.empty()) {
             if (!front) front = std::make_unique<Node>();
-            front->build(f);
+            front->build(f, depth + 1);
         }
         if (!b.empty()) {
             if (!back) back = std::make_unique<Node>();
-            back->build(b);
+            back->build(b, depth + 1);
         }
     }
 };
@@ -171,7 +182,7 @@ Mesh meshOf(const std::vector<Poly>& polys) {
                 const int v = *it;
                 if (v == a || v == b) continue;
                 const float t = glm::dot(m.verts[size_t(v)] - pa, d) / len2;
-                if (t <= 1e-4f || t >= 1 - 1e-4f) continue;
+                if (const float in = 2e-6f / std::sqrt(len2); t <= in || t >= 1 - in) continue; // (a µm or two from its ends: on a long edge, a part of it)
                 if (const glm::vec3 off = pa + d * t - m.verts[size_t(v)]; glm::dot(off, off) < 1e-10f) on.push_back({t, v});
             }
             std::sort(on.begin(), on.end());
@@ -206,13 +217,91 @@ void removeSpikes(Mesh& m) {
     std::erase_if(m.faces, [](const std::vector<int>& f) { return f.size() < 3; });
 }
 
-} // namespace
+// Gaps the cutting leaves (a tenth of a mm, where one side's rounding cut a piece the other
+// didn't): an edge with no face back along it. A small loop of them, or a sliver of next to no
+// area, gets a face of its own; the shape is closed again.
+void closeSmallGaps(Mesh& m) {
+    // Two faces back to back on the same corners (a wall of no thickness): both go.
+    std::map<std::vector<int>, std::vector<size_t>> byCorners;
+    auto key = [](std::vector<int> f) {
+        std::rotate(f.begin(), std::min_element(f.begin(), f.end()), f.end());
+        return f;
+    };
+    for (size_t i = 0; i < m.faces.size(); ++i) byCorners[key(m.faces[i])].push_back(i);
+    std::vector<bool> drop(m.faces.size(), false);
+    for (size_t i = 0; i < m.faces.size(); ++i) {
+        if (drop[i]) continue;
+        std::vector<int> r(m.faces[i].rbegin(), m.faces[i].rend());
+        if (auto it = byCorners.find(key(r)); it != byCorners.end())
+            for (size_t j : it->second)
+                if (j != i && !drop[j]) {
+                    drop[i] = drop[j] = true;
+                    break;
+                }
+    }
+    for (size_t i = m.faces.size(); i-- > 0;)
+        if (drop[i]) m.faces.erase(m.faces.begin() + long(i));
 
-bool combine(Mesh& a, const Mesh& b, Combine op) {
+    std::set<std::pair<int, int>> have;
+    for (const auto& f : m.faces)
+        for (size_t i = 0; i < f.size(); ++i) have.insert({f[i], f[(i + 1) % f.size()]});
+    std::map<int, std::vector<int>> next; // (the open edges, a to b)
+    for (auto [a, b] : have)
+        if (!have.contains({b, a})) next[a].push_back(b);
+    auto fill = [&](std::vector<int> loop) {
+        if (loop.size() < 3) return;
+        float around = 0.0f;
+        glm::vec3 area(0.0f);
+        for (size_t i = 0; i < loop.size(); ++i) {
+            const glm::vec3 p = m.verts[size_t(loop[i])], q = m.verts[size_t(loop[(i + 1) % loop.size()])];
+            around += glm::distance(p, q), area += glm::cross(p, q);
+        }
+        // A small one, or one next to flat: a piece the cutting lost. Else a real opening: left.
+        const glm::vec3 n = glm::length(area) > 0.0f ? glm::normalize(area) : glm::vec3(0.0f);
+        float bulge = 0.0f;
+        for (int v : loop) bulge = std::max(bulge, std::abs(glm::dot(m.verts[size_t(v)] - m.verts[size_t(loop[0])], n)));
+        if (around > 2e-3f && glm::length(area) > 2e-9f && bulge > 1e-4f) return;
+        std::reverse(loop.begin(), loop.end());
+        m.faces.push_back(loop);
+    };
+    while (!next.empty()) {
+        std::vector<int> loop{next.begin()->first};
+        while (!loop.empty() && loop.size() <= 64) {
+            auto it = next.find(loop.back());
+            if (it == next.end()) break; // (an open run, not a loop)
+            const int b = it->second.back();
+            it->second.pop_back();
+            if (it->second.empty()) next.erase(it);
+            // Back at a point already passed: the loop from there closes (two gaps meeting at a corner, a figure 8).
+            if (auto at = std::find(loop.begin(), loop.end(), b); at != loop.end()) {
+                fill(std::vector<int>(at, loop.end()));
+                loop.erase(at + 1, loop.end());
+                if (loop.size() == 1 && !next.contains(loop[0])) break;
+            } else
+                loop.push_back(b);
+        }
+    }
+}
+
+// Every edge has as many faces along it one way as the other (closed; edges where two parts
+// only touch count too).
+bool sealed(const Mesh& m) {
+    std::map<std::pair<int, int>, int> e;
+    for (const auto& f : m.faces)
+        for (size_t i = 0; i < f.size(); ++i) {
+            const int a = f[i], b = f[(i + 1) % f.size()];
+            a < b ? ++e[{a, b}] : --e[{b, a}];
+        }
+    for (auto [k, n] : e)
+        if (n) return false;
+    return true;
+}
+
+Mesh combineOnce(const Mesh& am, const Mesh& b, Combine op) {
     Node A, B;
-    A.build(polysOf(a));
+    A.build(polysOf(am));
     B.build(polysOf(b));
-    if (!A.hasPlane || !B.hasPlane) return false;
+    if (!A.hasPlane || !B.hasPlane) return {};
     std::vector<Poly> bp;
     switch (op) {
     case Combine::Add:
@@ -230,13 +319,35 @@ bool combine(Mesh& a, const Mesh& b, Combine op) {
     }
     std::vector<Poly> out;
     A.all(out);
-    a = meshOf(out);
+    Mesh a = meshOf(out);
     // Points the cutting left a hair apart (closer than 0.03 mm: nothing a printer or a model
     // could show) are one; else they fold tiny faces back over their neighbours.
     mergeByDistance(a, 3e-5f);
     removeSpikes(a);
     mergeFlatFaces(a);
     removeSpikes(a);
+    closeSmallGaps(a);
+    return a;
+}
+
+} // namespace
+
+bool combine(Mesh& a, const Mesh& b, Combine op) {
+    Mesh out = combineOnce(a, b, op);
+    // Closed going in but not coming out: the rounding went wrong somewhere. Again with the
+    // other shape moved a few µm (nothing that shows), and the first that comes out closed kept.
+    if (!out.faces.empty() && !sealed(out) && sealed(a) && sealed(b)) {
+        static const glm::vec3 nudge[] = {{3e-6f, 5e-6f, 7e-6f}, {-6e-6f, 4e-6f, -3e-6f}, {5e-6f, -7e-6f, 4e-6f}};
+        for (const glm::vec3& d : nudge) {
+            Mesh moved = b;
+            for (glm::vec3& v : moved.verts) v += d;
+            if (Mesh again = combineOnce(a, moved, op); !again.faces.empty() && sealed(again)) {
+                out = std::move(again);
+                break;
+            }
+        }
+    }
+    a = std::move(out);
     return !a.faces.empty();
 }
 

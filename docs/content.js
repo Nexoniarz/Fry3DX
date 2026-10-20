@@ -124,6 +124,7 @@ fry.frame()`,
   },
 
   versions: [
+    { v: "0.7", date: "2026-10-21", items: ["Steadier and tidier", "Cutting a shape inside an earlier cut no longer crashes, and cuts come out closed", "Edges hidden behind the surface stay hidden on big or cut-up shapes", "Every panel has a least size, so it stays readable; the first layout fits small windows", "Eye and padlock buttons in Layers; the tabs fit narrow windows", "A failed tool keeps your redo"] },
     { v: "0.6", date: "2026-10-20", items: ["Sculpting, scripts and a Mac app", "Sculpting: raise, puff out, smooth, flatten, pinch and grab", "Materials shown in the view, sixteen to start from", "Scripts: Lua and a Script panel, with examples, kept in the .fry", "Plug-ins: menu commands and materials, three to start with", "Your own materials", "Soft selection, bridge, push / pull, smooth points, show only the selected", "macOS: one app for Apple silicon and Intel", "A new look (Niveus): light and dark, following the desktop", "A new logo", "Drop a file on the window to open it"] },
     { v: "0.5", date: "2026-10-19", items: ["Builds for Windows, Linux (AppImage) and Android", "A phone layout: big buttons, finger gestures, the phone's file picker", "Apache License 2.0"] },
     { v: "0.4", date: "2026-10-19", items: ["Combine objects: add, subtract, overlap", "Draw shapes onto other objects", "Copies in a row or circle, thicken and hollow", "FBX export", "Folders and groups in Layers, go-to buttons", "Shift scales both sides, Shift+click loops and rings", "A crash screen of its own"] },

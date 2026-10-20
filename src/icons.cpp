@@ -213,6 +213,24 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 o, float s, ImU32 c) {
         line(0.62f, 0.34f, 0.84f, 0.16f, t * 0.8f), tri(0.92f, 0.08f, 0.78f, 0.12f, 0.88f, 0.22f);
         break;
     }
+    case Icon::Eye: case Icon::EyeShut: // an eye: open, or shut with its lashes
+        if (icon == Icon::Eye) {
+            dl->AddBezierQuadratic(P(0.04f, 0.5f), P(0.5f, 0.02f), P(0.96f, 0.5f), c, t);
+            dl->AddBezierQuadratic(P(0.04f, 0.5f), P(0.5f, 0.98f), P(0.96f, 0.5f), c, t);
+            dot(0.5f, 0.5f, 0.15f);
+        } else {
+            dl->AddBezierQuadratic(P(0.04f, 0.42f), P(0.5f, 0.86f), P(0.96f, 0.42f), c, t);
+            line(0.26f, 0.60f, 0.18f, 0.76f), line(0.5f, 0.66f, 0.5f, 0.84f), line(0.74f, 0.60f, 0.82f, 0.76f);
+        }
+        break;
+    case Icon::Lock: case Icon::Unlock: { // a padlock: the shackle down in it, or up and open
+        dl->AddRectFilled(P(0.24f, 0.46f), P(0.76f, 0.88f), c, s * 0.08f);
+        const float lift = icon == Icon::Unlock ? 0.12f : 0.0f;
+        dl->PathArcTo(P(0.5f, 0.38f - lift), 0.17f * s, 3.14159f, 3.14159f * 2.0f, 12);
+        dl->PathStroke(c, 0, t);
+        line(0.33f, 0.38f - lift, 0.33f, 0.47f - (lift > 0 ? lift : 0)), line(0.67f, 0.38f - lift, 0.67f, 0.47f);
+        break;
+    }
     case Icon::LayFlat:
         quad(0.22f, 0.40f, 0.62f, 0.22f, 0.86f, 0.50f, 0.46f, 0.68f, false, c);
         line(0.10f, 0.88f, 0.90f, 0.88f);
