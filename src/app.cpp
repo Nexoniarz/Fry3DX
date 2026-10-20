@@ -176,10 +176,10 @@ glm::vec3 forwardOf(float yaw, float pitch) {
 }
 
 // The engine's view-projection (render/renderer.cpp), in metres.
-glm::mat4 viewProjection(const glm::vec3& eye, float yaw, float pitch, float fov, float aspect, glm::vec2 shift) {
+glm::mat4 viewProjection(const glm::vec3& eye, float yaw, float pitch, float fov, float aspect, glm::vec2 shift, glm::vec2 nearFar) {
     const glm::vec3 f = forwardOf(yaw, pitch);
     glm::mat4 view = glm::lookAt(eye * kUnits, eye * kUnits + f, glm::vec3(0, 0, 1));
-    glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, 2.0f, 16384.0f);
+    glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, nearFar.x, nearFar.y);
     proj[1][1] *= -1.0f;
     proj[2][0] -= shift.x, proj[2][1] -= shift.y;
     return proj * view * glm::scale(glm::mat4(1.0f), glm::vec3(kUnits));
@@ -190,21 +190,6 @@ struct Ray {
 };
 
 // Möller–Trumbore; t along the ray, or nothing.
-std::optional<float> hitTriangle(const Ray& r, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
-    const glm::vec3 e1 = b - a, e2 = c - a, p = glm::cross(r.dir, e2);
-    const float det = glm::dot(e1, p);
-    if (std::abs(det) < 1e-12f) return std::nullopt;
-    const float inv = 1.0f / det;
-    const glm::vec3 s = r.origin - a;
-    const float u = glm::dot(s, p) * inv;
-    if (u < 0 || u > 1) return std::nullopt;
-    const glm::vec3 q = glm::cross(s, e1);
-    const float v = glm::dot(r.dir, q) * inv;
-    if (v < 0 || u + v > 1) return std::nullopt;
-    const float t = glm::dot(e2, q) * inv;
-    return t > 1e-6f ? std::optional<float>(t) : std::nullopt;
-}
-
 std::optional<glm::vec3> hitPlane(const Ray& r, const glm::vec3& point, const glm::vec3& normal) {
     const float d = glm::dot(r.dir, normal);
     if (std::abs(d) < 1e-8f) return std::nullopt;
@@ -776,6 +761,8 @@ private:
     View view_ = View::Perspective;
     glm::vec3 target_{0, 0, 0.4f};
     float yaw_ = -135.0f, pitch_ = 25.0f, dist_ = 4.0f, fov_ = 50.0f;
+    glm::vec2 nearFar_{2.0f, 16384.0f};
+    std::map<uint32_t, std::pair<uint64_t, float>> radii_; // (each object's mesh: how far it reaches from its place)
     ImVec2 viewMin_{0, 0}, viewMax_{1, 1};
     glm::mat4 vp_{1.0f};
     glm::vec3 eye_{0.0f};
@@ -4029,10 +4016,33 @@ private:
             if (auto p = hitPlane(ray, target_, -viewDir())) target_ += (*p - target_) * (1.0f - k);
             dist_ = std::clamp(dist_ * k, 0.01f, 5000.0f);
         }
+        settleView();
+    }
+    // Where the eye is and how the view maps to the screen, from the camera as it is now: again
+    // just before drawing, so the model and the lines over it agree (a touch can turn it between).
+    void settleView() {
+        const ImGuiIO& io = ImGui::GetIO();
         const float aspect = io.DisplaySize.x / std::max(io.DisplaySize.y, 1.0f);
         shift_ = glm::vec2((viewMin_.x + viewMax_.x) / std::max(io.DisplaySize.x, 1.0f) - 1.0f, (viewMin_.y + viewMax_.y) / std::max(io.DisplaySize.y, 1.0f) - 1.0f);
         eye_ = target_ - viewDir() * dist_;
-        vp_ = viewProjection(eye_, yaw_, pitch_, fov_, aspect, shift_);
+        nearFar_ = nearFar();
+        vp_ = viewProjection(eye_, yaw_, pitch_, fov_, aspect, shift_, nearFar_);
+    }
+    // How near and far the view draws (units), going by how far away it looks: close up to a
+    // 5 mm part, or out to see a whole town, the same share of the depth's precision.
+    glm::vec2 nearFar() {
+        float reach = 1.0f; // (how far from the middle the furthest object reaches, m)
+        for (const Object& o : scene_.objects) {
+            auto& [version, radius] = radii_[o.id];
+            if (version != versions_[o.id] || !version) {
+                version = versions_[o.id], radius = 0;
+                for (const glm::vec3& v : o.mesh.verts) radius = std::max(radius, glm::length(v));
+            }
+            reach = std::max(reach, glm::length(o.position) + radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
+        }
+        const float nearM = std::clamp(dist_ * 0.002f, 1e-5f, 50.0f);
+        const float farM = std::max({dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, 100.0f});
+        return glm::vec2(nearM, farM) * kUnits;
     }
 
     // World point → screen (false behind the eye).
@@ -4114,43 +4124,70 @@ private:
         const Hit h = pickObject({eye_, d / len}, o.id);
         return h.t > len - std::max(len * 0.002f, 0.0005f);
     }
-    // Which of an object's points the eye can see, worked out again only when it or the view
-    // changes. The triangles are sorted into a grid on the screen first: a point is tried only
-    // against those over its own square (what could be between it and the eye).
+    // Whether the eye can see an object's point (nothing of it in between): each tried when it's
+    // first asked about, kept till the object or the view changes. (Only what's drawn is asked:
+    // the outline's points, not every point of a big mesh, as the view turns.)
     struct Visibility {
         uint64_t version = 0;
         glm::vec3 eye{1e30f};
         glm::mat4 vp{0.0f};
-        std::vector<char> point;
+        std::vector<char> point; // 0 not tried yet, 1 seen, 2 hidden
     };
     std::map<std::pair<uint32_t, bool>, Visibility> visibility_; // (an object's own mesh, or the one shown)
-    const std::vector<char>& visiblePoints(const Object& o) { return visiblePoints(o, o.mesh); }
-    const std::vector<char>& visiblePoints(const Object& o, const Mesh& mesh) {
+    bool seen(const Object& o, const Mesh& mesh, int i) {
         Visibility& v = visibility_[{o.id, &mesh != &o.mesh}];
         const uint64_t version = versions_[o.id];
-        if (v.version == version && glm::distance(v.eye, eye_) < 1e-6f && v.vp == vp_ && v.point.size() == mesh.verts.size()) return v.point;
-        v.version = version, v.eye = eye_, v.vp = vp_;
-        v.point.assign(mesh.verts.size(), 1);
-        // (each point: is anything of it between the point and the eye)
+        if (v.version != version || glm::distance(v.eye, eye_) >= 1e-6f || v.vp != vp_ || v.point.size() != mesh.verts.size())
+            v.version = version, v.eye = eye_, v.vp = vp_, v.point.assign(mesh.verts.size(), 0);
+        char& got = v.point[size_t(i)];
+        if (got) return got == 1;
         const fry::TriangleTree& tree = treeOf(o, mesh);
-        const std::vector<glm::vec3>& w = tree.points();
-        for (size_t i = 0; i < w.size(); ++i) {
-            const glm::vec4 c = vp_ * glm::vec4(w[i], 1.0f);
-            if (c.w < 1e-5f || std::abs(c.x) > c.w || std::abs(c.y) > c.w) continue; // (off the screen: not drawn anyway)
-            const glm::vec3 d = w[i] - eye_;
-            const float len = glm::length(d);
-            if (len < 1e-6f) continue;
-            if (tree.blocked(eye_, d / len, len - std::max(len * 0.002f, 0.0005f), int(i))) v.point[i] = 0;
-        }
-        return v.point;
+        const glm::vec3 w = tree.points()[size_t(i)];
+        const glm::vec4 c = vp_ * glm::vec4(w, 1.0f);
+        const glm::vec3 d = w - eye_;
+        const float len = glm::length(d);
+        if (c.w < 1e-5f || std::abs(c.x) > c.w || std::abs(c.y) > c.w || len < 1e-6f) return (got = 1); // (off the screen: not drawn anyway)
+        got = tree.blocked(eye_, d / len, len - std::max(len * 0.002f, 0.0005f), i) ? 2 : 1;
+        return got == 1;
     }
-    bool pointSeen(const Object& o, int v) { return xray_ || visiblePoints(o)[size_t(v)]; }
+    // Each edge of a mesh and the (first two) faces it's on, with the faces' normals: worked out
+    // again only when the mesh changes.
+    struct Adjacency {
+        uint64_t version = 0;
+        size_t verts = 0, faces = 0;
+        std::vector<std::array<int, 4>> edges; // a, b, a face, the other (or -1)
+        std::vector<glm::vec4> plane;          // each face's normal, and its distance along it
+    };
+    std::map<std::pair<uint32_t, bool>, Adjacency> adjacency_;
+    const Adjacency& adjacencyOf(const Object& o, const Mesh& mesh) {
+        Adjacency& a = adjacency_[{o.id, &mesh != &o.mesh}];
+        const uint64_t version = versions_[o.id];
+        if (a.version == version && version && a.verts == mesh.verts.size() && a.faces == mesh.faces.size()) return a;
+        a.version = version, a.verts = mesh.verts.size(), a.faces = mesh.faces.size();
+        a.edges.clear(), a.plane.resize(mesh.faces.size());
+        std::unordered_map<uint64_t, int> at;
+        at.reserve(mesh.faces.size() * 2);
+        for (size_t f = 0; f < mesh.faces.size(); ++f) {
+            const auto& fv = mesh.faces[f];
+            const glm::vec3 n = faceNormal(mesh, int(f));
+            a.plane[f] = glm::vec4(n, fv.empty() ? 0.0f : glm::dot(n, mesh.verts[size_t(fv[0])]));
+            for (size_t i = 0; i < fv.size(); ++i) {
+                const int p = std::min(fv[i], fv[(i + 1) % fv.size()]), q = std::max(fv[i], fv[(i + 1) % fv.size()]);
+                auto [it, fresh] = at.try_emplace(uint64_t(uint32_t(p)) << 32 | uint32_t(q), int(a.edges.size()));
+                if (fresh) a.edges.push_back({p, q, int(f), -1});
+                else if (a.edges[size_t(it->second)][3] < 0) a.edges[size_t(it->second)][3] = int(f);
+            }
+        }
+        return a;
+    }
+    bool pointSeen(const Object& o, int v) { return xray_ || seen(o, o.mesh, v); }
 
     // The edge of the edited object nearest the mouse on screen (that can be seen), or (-1, -1).
     std::pair<int, int> nearestEdge(Object& o, ImVec2 mouse, float within) {
         const glm::mat4 m = objectMatrix(o);
         std::pair<int, int> best{-1, -1};
-        for (auto [a, b] : edges(o.mesh)) {
+        for (const auto& e : adjacencyOf(o, o.mesh).edges) {
+            const int a = e[0], b = e[1];
             ImVec2 sa, sb;
             if (!project(glm::vec3(m * glm::vec4(o.mesh.verts[size_t(a)], 1.0f)), sa) || !project(glm::vec3(m * glm::vec4(o.mesh.verts[size_t(b)], 1.0f)), sb)) continue;
             const float d = distToSegment(mouse, sa, sb);
@@ -5192,8 +5229,9 @@ private:
     float gridStep() const { return std::pow(10.0f, std::floor(std::log10(std::max(viewHeight() / 4.0f, 1e-4f)))); }
 
     void draw3D(keel::Renderer& r) {
+        settleView();
         keel::Camera cam;
-        cam.origin = eye_ * kUnits, cam.yaw = yaw_, cam.pitch = pitch_, cam.fovY = fov_, cam.shift = shift_;
+        cam.origin = eye_ * kUnits, cam.yaw = yaw_, cam.pitch = pitch_, cam.fovY = fov_, cam.shift = shift_, cam.zNear = nearFar_.x, cam.zFar = nearFar_.y;
         r.setCamera(cam);
         const Look& look = scene_.look;
         const bool rendered = shading() == Shading::Rendered;
@@ -5271,20 +5309,32 @@ private:
             const float step = gridStep();
             const int count = 20;
             const glm::vec3 centre = target_ - n * glm::dot(target_, n);
-            const float cu = snapTo(glm::dot(centre, u), step * 10), cv = snapTo(glm::dot(centre, v), step * 10);
             const float shade = rendered ? 0.0f : 1.0f; // (dark lines on the sunny ground, light ones in the grey room)
-            for (int i = -count; i <= count; ++i)
-                for (int dir = 0; dir < 2; ++dir) {
-                    const glm::vec3 along = dir ? u : v, across = dir ? v : u;
-                    const float at = (dir ? cv : cu) + float(i) * step, mid = dir ? cu : cv;
-                    const glm::vec3 a = across * at + along * (mid - count * step), b = across * at + along * (mid + count * step);
-                    const bool major = std::abs(snapTo(at, step * 10) - at) < step * 0.01f, axis = std::abs(at) < step * 0.01f;
-                    glm::vec4 col = glm::vec4(glm::vec3(shade), major ? (rendered ? 0.35f : 0.13f) : (rendered ? 0.16f : 0.06f));
-                    if (axis) col = dir ? (n.x > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.9f, 0.25f, 0.25f, 0.9f))
-                                        : (n.z > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.25f, 0.45f, 0.95f, 0.9f));
-                    const float w = pixelSize(target_) * (major || axis ? 1.6f : 1.0f) * kUnits;
-                    r.drawStreak(a * kUnits, b * kUnits, w, col, keel::kWhiteTexture);
-                }
+            // Two rings: the fine lines round where you look, then lines ten times apart out to
+            // the horizon (they leave out the middle, so no line is drawn twice).
+            for (int level = 0; level < 2; ++level) {
+                const float s = step * (level ? 10.0f : 1.0f), inner = count * step; // (the fine ring's reach)
+                const float cu = snapTo(glm::dot(centre, u), step * 10), cv = snapTo(glm::dot(centre, v), step * 10);
+                const float fade = level ? 0.6f : 1.0f;
+                for (int i = -count; i <= count; ++i)
+                    for (int dir = 0; dir < 2; ++dir) {
+                        const glm::vec3 along = dir ? u : v, across = dir ? v : u;
+                        const float at = (dir ? cv : cu) + float(i) * s, mid = dir ? cu : cv;
+                        const bool major = std::abs(snapTo(at, s * 10) - at) < s * 0.01f;
+                        const bool axis = std::abs(at) < s * 0.01f;
+                        glm::vec4 col = glm::vec4(glm::vec3(shade), (major ? (rendered ? 0.35f : 0.13f) : (rendered ? 0.16f : 0.06f)) * fade);
+                        if (axis) col = dir ? (n.x > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.9f, 0.25f, 0.25f, 0.9f))
+                                            : (n.z > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.25f, 0.45f, 0.95f, 0.9f));
+                        const float w = pixelSize(target_) * (major || axis ? 1.6f : 1.0f) * kUnits;
+                        const float from = mid - count * s, to = mid + count * s;
+                        const glm::vec3 a = across * at + along * from, b = across * at + along * to;
+                        if (level == 0 || std::abs(at - (dir ? cv : cu)) > inner * 1.0001f) r.drawStreak(a * kUnits, b * kUnits, w, col, keel::kWhiteTexture);
+                        else { // (a far line through the fine ring, which has it already: its two ends)
+                            r.drawStreak(a * kUnits, (across * at + along * (mid - inner)) * kUnits, w, col, keel::kWhiteTexture);
+                            r.drawStreak((across * at + along * (mid + inner)) * kUnits, b * kUnits, w, col, keel::kWhiteTexture);
+                        }
+                    }
+            }
         }
         if (tab_ == Tab::Print) drawPrintBed(r, light);
     }
@@ -5298,38 +5348,30 @@ private:
         // Every edge of a mesh (X-ray, wireframe), or just the edges the eye can see.
         auto lines = [&](const Object& o, const Mesh& mesh, ImU32 col, float width, bool seenOnly) {
             const glm::mat4 m = objectMatrix(o);
-            const std::vector<char>* vis = seenOnly && !xray_ ? &visiblePoints(o) : nullptr;
+            const bool hide = seenOnly && !xray_;
             std::vector<ImVec2> s(mesh.verts.size());
             std::vector<char> ok(mesh.verts.size());
             for (size_t i = 0; i < s.size(); ++i) ok[i] = project(glm::vec3(m * glm::vec4(mesh.verts[i], 1.0f)), s[i]);
-            for (auto [a, b] : edges(mesh)) {
-                if (vis && !((*vis)[size_t(a)] && (*vis)[size_t(b)])) continue;
-                if (ok[size_t(a)] && ok[size_t(b)]) dl->AddLine(s[size_t(a)], s[size_t(b)], col, width);
+            for (const auto& e : adjacencyOf(o, mesh).edges) {
+                if (!ok[size_t(e[0])] || !ok[size_t(e[1])] || (hide && !(seen(o, mesh, e[0]) && seen(o, mesh, e[1])))) continue;
+                dl->AddLine(s[size_t(e[0])], s[size_t(e[1])], col, width);
             }
         };
         // The outline round a selected object (where it turns away from you, and open edges).
         auto outline = [&](const Object& o, ImU32 col, float width) {
             const Mesh& mesh = shownMesh(o);
             const glm::mat4 m = objectMatrix(o);
-            std::vector<glm::vec3> w(mesh.verts.size());
-            for (size_t i = 0; i < w.size(); ++i) w[i] = glm::vec3(m * glm::vec4(mesh.verts[i], 1.0f));
-            std::map<std::pair<int, int>, int> side; // bit 1: a face towards you, bit 2: away; + 4 each face
-            for (size_t f = 0; f < mesh.faces.size(); ++f) {
-                const auto& fv = mesh.faces[f];
-                glm::vec3 n(0.0f);
-                for (size_t i = 0; i < fv.size(); ++i) n += glm::cross(w[size_t(fv[i])], w[size_t(fv[(i + 1) % fv.size()])]);
-                const int facing = glm::dot(n, eye_ - w[size_t(fv[0])]) > 0 ? 1 : 2;
-                for (size_t i = 0; i < fv.size(); ++i) {
-                    int& s = side[{std::min(fv[i], fv[(i + 1) % fv.size()]), std::max(fv[i], fv[(i + 1) % fv.size()])}];
-                    s = (s | facing) + 4;
-                }
-            }
-            const std::vector<char>* vis = xray_ ? nullptr : &visiblePoints(o, mesh); // (not the edges of a pocket behind its rim)
-            for (auto [e, s] : side) {
-                const bool silhouette = (s & 3) == 3, open = (s >> 2) == 1 && (s & 1);
-                if (vis && !((*vis)[size_t(e.first)] && (*vis)[size_t(e.second)])) continue;
+            const Adjacency& adj = adjacencyOf(o, mesh);
+            // (which faces look at the eye: the eye taken into the object's own space, no point moved)
+            const glm::vec3 eye = glm::vec3(glm::inverse(m) * glm::vec4(eye_, 1.0f));
+            std::vector<char> facing(adj.plane.size());
+            for (size_t f = 0; f < facing.size(); ++f) facing[f] = glm::dot(glm::vec3(adj.plane[f]), eye) > adj.plane[f].w;
+            for (const auto& e : adj.edges) {
+                const bool silhouette = e[3] >= 0 && facing[size_t(e[2])] != facing[size_t(e[3])], open = e[3] < 0 && facing[size_t(e[2])];
+                if (!silhouette && !open) continue;
+                if (!xray_ && !(seen(o, mesh, e[0]) && seen(o, mesh, e[1]))) continue; // (not the edges of a pocket behind its rim)
                 ImVec2 a, b;
-                if ((silhouette || open) && project(w[size_t(e.first)], a) && project(w[size_t(e.second)], b)) dl->AddLine(a, b, col, width);
+                if (project(glm::vec3(m * glm::vec4(mesh.verts[size_t(e[0])], 1.0f)), a) && project(glm::vec3(m * glm::vec4(mesh.verts[size_t(e[1])], 1.0f)), b)) dl->AddLine(a, b, col, width);
             }
         };
         const bool clean = capturing(); // (a picture being saved: no outlines or gizmos)

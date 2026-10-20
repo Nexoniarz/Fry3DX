@@ -100,7 +100,7 @@ glm::mat4 viewProjection(const Camera& c, float aspect) {
     const glm::vec3 forward = forwardOf(c);
     const glm::vec3 up = glm::vec3(glm::rotate(glm::mat4(1), glm::radians(c.roll), forward) * glm::vec4(0, 0, 1, 0));
     glm::mat4 view = glm::lookAt(c.origin, c.origin + forward, up);
-    glm::mat4 proj = glm::perspective(glm::radians(c.fovY), aspect, 2.0f, 16384.0f);
+    glm::mat4 proj = glm::perspective(glm::radians(c.fovY), aspect, c.zNear, c.zFar);
     proj[1][1] *= -1.0f; // clip-space Y points down (Vulkan; OpenGL is set up to match)
     proj[2][0] -= c.shift.x, proj[2][1] -= c.shift.y;
     return proj * view;
@@ -789,7 +789,7 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
             p.post.sunColor = glm::vec4(sunColor_, 0.0f);
         }
     }
-    p.post.proj = glm::vec4(tanY * float(width) / float(height), tanY, 2.0f, 16384.0f);
+    p.post.proj = glm::vec4(tanY * float(width) / float(height), tanY, camera_.zNear, camera_.zFar);
     p.clearColor = glm::vec3(srgbToLinear(sky.r), srgbToLinear(sky.g), srgbToLinear(sky.b)) / p.exposure;
     // The mirror's pass: this frame's data, but seen from the reflected eye, cut at the mirror,
     // lit by every light (the clusters are this view's), and no fog grid (that's this view's too).

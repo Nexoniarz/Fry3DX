@@ -22,6 +22,7 @@ struct Camera {
     float roll = 0.0f;  // degrees, positive tilts right
     float fovY = 74.0f; // degrees
     glm::vec2 shift{0.0f}; // where the picture's middle sits on the screen (-1..1 across, down): a view beside panels
+    float zNear = 2.0f, zFar = 16384.0f; // what's nearer or further isn't drawn (units)
 };
 
 // Baked light for a moving model (from the map's probes): ambient cube + sun visibility.
