@@ -714,6 +714,7 @@ public:
         copiesWindow();
         thickenWindow();
         textWindow();
+        printSizeWindow();
         pushWindow();
         saveQuestion();
         recoverWindow();
@@ -3093,6 +3094,84 @@ private:
         const glm::vec3 pivot((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, lo.z);
         for (Object* o : targets) o->position = pivot + (o->position - pivot) * k, o->scale *= k, touched(o->id);
     }
+    // Everything picked made `k` times as big, standing where it stood.
+    void printScale(float k) {
+        const auto targets = printTargets();
+        if (targets.empty() || !(k > 0) || std::abs(k - 1) < 1e-6f) return;
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        for (Object* o : targets) lo = glm::min(lo, printInfo(*o).lo), hi = glm::max(hi, printInfo(*o).hi);
+        const glm::vec3 pivot((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, lo.z);
+        for (Object* o : targets) o->position = pivot + (o->position - pivot) * k, o->scale *= k, touched(o->id);
+    }
+    // The scaler: by a share, to fit the plate, or from the wrong units (a model made in inches,
+    // centimetres or metres comes in 25.4, 10 or 1000 times off).
+    float scalePercent_ = 100.0f;
+    void printScaler(float w) {
+        const auto targets = printTargets();
+        if (targets.empty()) return;
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        for (Object* o : targets) lo = glm::min(lo, printInfo(*o).lo), hi = glm::max(hi, printInfo(*o).hi);
+        const glm::vec3 size = (hi - lo) * 1000.0f, bed = bedSize() * 1000.0f;
+        auto scale = [&](float k, const char* what) {
+            pushUndo();
+            printScale(k);
+            say(std::format("{}: now {:.1f} x {:.1f} x {:.1f} mm", what, size.x * k, size.y * k, size.z * k));
+        };
+        const float bw = (w - ImGui::GetStyle().ItemSpacing.x * 3) / 4;
+        ImGui::SetNextItemWidth(w - bw - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::InputFloat("##pct", &scalePercent_, 0, 0, "%.1f %%");
+        scalePercent_ = std::clamp(scalePercent_, 0.1f, 100000.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("Scale", ImVec2(bw, 0))) scale(scalePercent_ / 100, std::format("Scaled to {:g}%", scalePercent_).c_str()), scalePercent_ = 100;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Make it this share of the size it is now (50%%: half, 200%%: twice)");
+        const struct {
+            const char* label;
+            float k;
+            const char* tip;
+        } quick[] = {{"x 0.5", 0.5f, "Half the size"}, {"x 2", 2.0f, "Twice the size"}, {"in > mm", 25.4f, "It was made in inches: 1 became 1 mm, should be 25.4"},
+                     {"cm > mm", 10.0f, "It was made in centimetres: 1 became 1 mm, should be 10"}};
+        for (int i = 0; i < 4; ++i) {
+            if (i) ImGui::SameLine();
+            if (ImGui::Button(quick[i].label, ImVec2(bw, 0))) scale(quick[i].k, quick[i].tip);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", quick[i].tip);
+        }
+        const float fit = std::min({bed.x / std::max(size.x, 1e-3f), bed.y / std::max(size.y, 1e-3f), bed.z / std::max(size.z, 1e-3f)}) * 0.95f;
+        if (ImGui::Button(std::format("Fit the plate ({:.0f}%)", fit * 100).c_str(), ImVec2(w * 0.5f - ImGui::GetStyle().ItemSpacing.x * 0.5f, 0))) {
+            scale(fit, "Made as big as fits the plate");
+            middleOfBed();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("As big as fits on this printer (a little room left round it), in the middle");
+        ImGui::SameLine();
+        if (ImGui::Button("m > mm", ImVec2(w * 0.5f - ImGui::GetStyle().ItemSpacing.x * 0.5f, 0))) scale(1000.0f, "It was made in metres: 1 became 1 mm");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("It came in a thousand times too small (made in metres, read as millimetres)");
+    }
+    void printSizeWindow() {
+        if (!showPrintSize_) return;
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Print size", &showPrintSize_, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) return ImGui::End();
+        const float w = 320;
+        const auto targets = printTargets();
+        if (targets.empty()) ImGui::TextWrapped("Nothing to size: add something in the Model tab.");
+        else {
+            glm::vec3 lo(1e30f), hi(-1e30f);
+            for (Object* o : targets) lo = glm::min(lo, printInfo(*o).lo), hi = glm::max(hi, printInfo(*o).hi);
+            const glm::vec3 size = (hi - lo) * 1000.0f;
+            ImGui::TextDisabled("%s", selected_.empty() ? "Everything" : targets.size() == 1 ? targets[0]->name.c_str() : "What's picked");
+            const char* axes[] = {"across", "deep", "high"};
+            for (int a = 0; a < 3; ++a) {
+                float v = size[a];
+                ImGui::SetNextItemWidth(w * 0.7f);
+                ImGui::PushID(a);
+                if (ImGui::InputFloat("##size", &v, 0, 0, "%.2f mm", ImGuiInputTextFlags_EnterReturnsTrue)) pushUndo(), printResize(a, v);
+                ImGui::PopID();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", axes[a]);
+            }
+            ImGui::Spacing();
+            printScaler(w);
+        }
+        ImGui::End();
+    }
     void printToolbox(float w) {
         ImGui::Spacing();
         if (wideButton("##measure", Icon::Ruler, "Measure", printTool_ == PrintTool::Measure, w, "Click two points to see how far apart they are (M)"))
@@ -3231,6 +3310,7 @@ private:
             ImGui::TextDisabled("%s", axes[a]);
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Type a size: it keeps its shape");
+        printScaler(w);
         const glm::vec3 b = bedSize();
         const bool fits = size.x <= bed.x + 0.05f && size.y <= bed.y + 0.05f && size.z <= bed.z + 0.05f;
         const bool onPlate = lo.x >= -b.x * 0.5f - 1e-4f && hi.x <= b.x * 0.5f + 1e-4f && lo.y >= -b.y * 0.5f - 1e-4f && hi.y <= b.y * 0.5f + 1e-4f && hi.z <= b.z + 1e-4f;
@@ -5762,7 +5842,7 @@ private:
         add("object.cleanflat", "Join flat faces side by side", "Object", "", [this] { cleanFlatFaces(); }, picked, "dissolve tidy");
         add("object.spin", "Spin (turn its outline round an axis)...", "Object", "", [this] { showSpin_ = true; }, [this] { return !selected_.empty(); }, "lathe screw revolve");
         add("object.repair", "Repair for printing (close holes, fix faces)", "Print", "", [this] { repairSelected(); }, picked, "fix manifold watertight holes");
-        add("object.scale", "Scale to a size (mm)...", "Print", "", [this] { setTab(Tab::Print), showPrintSize_ = true; }, picked, "resize fit dimensions percent scaler");
+        add("object.scale", "Print size: scale, fit the plate, fix units...", "Print", "", [this] { setTab(Tab::Print), showPrintSize_ = true; }, picked, "resize fit dimensions percent scaler");
         for (const ToolInfo& t : kTools)
             add(std::string("tool.") + t.name, std::string("Tool: ") + t.name, "Tools", t.key, [this, tool = t.tool, obj = t.objectMode] {
                 if (tab_ != Tab::Model) setTab(Tab::Model);
