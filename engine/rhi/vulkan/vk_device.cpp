@@ -263,6 +263,24 @@ bool Device::createSwapchain() {
     return true;
 }
 
+// A new surface on the window as it is now (Android makes a new one each time the app comes back).
+bool Device::recreateSurface() {
+    vkDeviceWaitIdle(device_);
+    destroySwapchainViews();
+    if (swapchain_) vkDestroySwapchainKHR(device_, swapchain_, nullptr), swapchain_ = VK_NULL_HANDLE;
+    if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr), surface_ = VK_NULL_HANDLE;
+    if (!SDL_Vulkan_CreateSurface(window_->handle(), instance_, nullptr, &surface_)) {
+        log::warn("SDL_Vulkan_CreateSurface (again): {}", SDL_GetError());
+        surface_ = VK_NULL_HANDLE;
+        return false; // (tried again next frame)
+    }
+    VkBool32 present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queueFamily_, surface_, &present);
+    if (!present) log::warn("The new surface can't be presented to from this queue");
+    surfaceLost_ = false;
+    return createSwapchain();
+}
+
 void Device::destroySwapchainViews() {
     for (VkImageView v : views_) vkDestroyImageView(device_, v, nullptr);
     for (VkSemaphore s : renderDone_) vkDestroySemaphore(device_, s, nullptr);
@@ -271,6 +289,7 @@ void Device::destroySwapchainViews() {
 }
 
 VkCommandBuffer Device::beginFrame() {
+    if (surfaceLost_ && !recreateSurface()) return nullptr;
     if (swapchainDirty_ && !createSwapchain()) return nullptr;
 
     Frame& f = frames_[frameIndex_];
@@ -278,6 +297,10 @@ VkCommandBuffer Device::beginFrame() {
     VkResult r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &imageIndex_);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         swapchainDirty_ = true;
+        return nullptr;
+    }
+    if (r == VK_ERROR_SURFACE_LOST_KHR) {
+        surfaceLost_ = true;
         return nullptr;
     }
     if (r != VK_SUBOPTIMAL_KHR) VK_CHECK(r);
@@ -328,6 +351,7 @@ void Device::endFrame() {
     }
 #endif
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swapchainDirty_ = true;
+    else if (r == VK_ERROR_SURFACE_LOST_KHR) surfaceLost_ = true;
     else VK_CHECK(r);
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;

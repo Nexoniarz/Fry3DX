@@ -218,6 +218,8 @@ public:
     virtual void beginUi() = 0;
     virtual void setVsync(bool on) = 0;
     virtual void onResize() = 0;
+    // Back from the background (a phone): the window's surface may be a new one.
+    virtual void onSurfaceLost() { onResize(); }
     // A texture in table slot `slot`, mips largest first: RGBA8 pixels, or BC7 blocks (YAPF 2's
     // GPU payload) when blockCompression() says the GPU takes them.
     virtual void createTexture(TextureId slot, uint32_t width, uint32_t height, bool srgb, const std::vector<std::vector<uint8_t>>& mips,

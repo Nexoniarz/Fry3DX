@@ -19,7 +19,7 @@
             android:name="io.github.nexoniarz.fry3dx.FryActivity"
             android:exported="true"
             android:label="Fry3DX"
-            android:screenOrientation="fullUser"
+            android:screenOrientation="sensorLandscape"
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">

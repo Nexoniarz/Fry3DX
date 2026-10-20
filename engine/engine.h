@@ -36,6 +36,9 @@ public:
     // A file dropped on the window, or opened with the program from the desktop (a Mac's Finder
     // hands it over this way, not on the command line).
     virtual void onFileDropped(const std::string& path) { (void)path; }
+    // Going into the background (a phone: another app, the home screen), or the system is short
+    // of memory: the work should be kept now, as the app may be closed while it's away.
+    virtual void onBackground() {}
     // Hot reload: called twice a second (hotreload 1) after the engine reloaded what changed
     // (`changed`: textures, models, sounds); the game reloads its own (scripts, the map).
     virtual void hotReload(const std::vector<std::string>& changed) { (void)changed; }

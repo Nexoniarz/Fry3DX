@@ -157,6 +157,9 @@ public:
     void onResize() {
         if (backend_) backend_->onResize();
     }
+    void onSurfaceLost() {
+        if (backend_) backend_->onSurfaceLost();
+    }
 
 private:
     struct Submesh {

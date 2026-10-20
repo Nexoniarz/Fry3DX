@@ -610,10 +610,51 @@ public:
         loadPlugins();
         if (!startPath_.empty()) openFile(startPath_);
         findAutosaves();
+        if (startPath_.empty()) resumeWork();
+    }
+
+    // Going into the background: the work is saved now (a phone may close the app while it's
+    // away, to free memory), and a phone's next start carries on with it, view and all.
+    std::string resumeFile() const { return keel::prefPath() + "resume.txt"; }
+    void onBackground() override {
+        if (dirty_) autosave(true);
+        if (autosaveJob_.valid()) autosaveJob_.wait();
+#if defined(__ANDROID__)
+        std::ofstream(resumeFile()) << (dirty_ ? autosavePath_ : std::string()) << '\n'
+                                    << path_ << '\n'
+                                    << int(tab_) << ' ' << target_.x << ' ' << target_.y << ' ' << target_.z << ' ' << yaw_ << ' ' << pitch_ << ' ' << dist_ << '\n';
+#endif
+    }
+    void resumeWork() {
+#if defined(__ANDROID__)
+        std::ifstream in(resumeFile());
+        if (!in) return;
+        std::string saved, from;
+        std::getline(in, saved), std::getline(in, from);
+        int tab = 0;
+        glm::vec3 target = target_;
+        float yaw = yaw_, pitch = pitch_, dist = dist_;
+        const bool view = bool(in >> tab >> target.x >> target.y >> target.z >> yaw >> pitch >> dist);
+        in.close();
+        std::error_code ec;
+        stdfs::remove(resumeFile(), ec);
+        if (!saved.empty() && stdfs::exists(saved, ec)) { // (unsaved work: as recovering it, without asking)
+            openFile(saved);
+            path_ = from, dirty_ = true, autosavePath_ = saved;
+            showRecover_ = false;
+        } else if (!from.empty())
+            openFile(from);
+        else
+            return;
+        if (view) setTab(Tab(std::clamp(tab, 0, 4))), target_ = target, yaw_ = yaw, pitch_ = std::clamp(pitch, -89.0f, 89.0f), dist_ = std::max(dist, 0.01f);
+        say("Carried on where you left off");
+#endif
     }
 
     void frame(double) override { autosave(); }
     bool allowQuit() override {
+        std::error_code ec;
+        stdfs::remove(resumeFile(), ec); // (closed on purpose: the next start is a fresh one)
         if (!dirty_) return dropAutosave(), true;
         askSave_ = 1;
         return false;
@@ -7282,6 +7323,9 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]).ends_with(".fry") && argv[i - 1][0] != '+') path = argv[i]; // (not a console command's own)
         else rest.push_back(argv[i]);
     }
+#if defined(__ANDROID__) // (a phone: sideways only; SDL would otherwise let a resizable window turn upright)
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#endif
     App app(path);
     return keel::run(app, int(rest.size()), rest.data());
 }

@@ -404,6 +404,7 @@ public:
     }
     void setVsync(bool on) override { device_.setVsync(on); }
     void onResize() override { device_.markResized(); }
+    void onSurfaceLost() override { device_.markSurfaceLost(); }
 
     bool renderScale() const override { return true; }
     bool blockCompression() const override {

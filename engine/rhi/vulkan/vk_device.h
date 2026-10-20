@@ -50,6 +50,8 @@ public:
 
     void setVsync(bool vsync) { vsync_ = vsync; swapchainDirty_ = true; }
     void markResized() { swapchainDirty_ = true; }
+    // The window's surface went away (a phone: the app was in the background): made again.
+    void markSurfaceLost() { surfaceLost_ = true; }
     void waitIdle() { vkDeviceWaitIdle(device_); }
 
     VkInstance instance() const { return instance_; }
@@ -81,6 +83,7 @@ private:
     };
 
     bool createSwapchain();
+    bool recreateSurface();
     void destroySwapchainViews();
 
     const Window* window_ = nullptr;
@@ -102,7 +105,7 @@ private:
     std::vector<VkImageView> views_;
     std::vector<VkSemaphore> renderDone_; // per swapchain image, so present never reuses one in flight
     bool vsync_ = true;
-    bool swapchainDirty_ = false;
+    bool swapchainDirty_ = false, surfaceLost_ = false;
 
     Frame frames_[kFramesInFlight];
     VkCommandPool immPool_ = VK_NULL_HANDLE;

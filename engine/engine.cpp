@@ -371,6 +371,11 @@ int runClient(Game& game) {
             if (!input::captured()) ImGui_ImplSDL3_ProcessEvent(&ev);
             if (ev.type == SDL_EVENT_QUIT && game.allowQuit()) g_quit = true;
             if (ev.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) renderer.onResize();
+            // (a phone: SDL waits once these are seen, until the app's back; the surface is new then)
+            if (ev.type == SDL_EVENT_WILL_ENTER_BACKGROUND || ev.type == SDL_EVENT_LOW_MEMORY || ev.type == SDL_EVENT_TERMINATING) game.onBackground();
+#if defined(__ANDROID__)
+            if (ev.type == SDL_EVENT_DID_ENTER_FOREGROUND) renderer.onSurfaceLost();
+#endif
         }
         const bool focused = SDL_GetWindowFlags(window.handle()) & SDL_WINDOW_INPUT_FOCUS;
         audio::setFocused(focused);
