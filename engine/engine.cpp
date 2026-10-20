@@ -4,6 +4,7 @@
 #include "core/console.h"
 #include "core/cvar.h"
 #include "core/log.h"
+#include "core/sysinfo.h"
 #include "core/time.h"
 #include "fs/vfs.h"
 #include "platform/input.h"
@@ -289,6 +290,10 @@ int runClient(Game& game) {
 #if defined(__ANDROID__)
     if (first != RenderApi::Vulkan) first = RenderApi::GLES30;
     const std::initializer_list<RenderApi> all{RenderApi::Vulkan, RenderApi::GLES30};
+#elif defined(__APPLE__)
+    // (A Mac: Vulkan through MoltenVK, else OpenGL as far as macOS has it: 4.1.)
+    if (first != RenderApi::Vulkan) first = RenderApi::OpenGL40;
+    const std::initializer_list<RenderApi> all{RenderApi::Vulkan, RenderApi::OpenGL40};
 #else
     const std::initializer_list<RenderApi> all{RenderApi::Vulkan, RenderApi::OpenGL, RenderApi::OpenGL40, RenderApi::OpenGL31, RenderApi::GLES30};
 #endif
@@ -354,6 +359,10 @@ int runClient(Game& game) {
                 if (console::isOpen()) console::toggle();
                 else if (ui::popupOpen()) ui::closePopup();
                 else game.onEscape();
+                continue;
+            }
+            if (ev.type == SDL_EVENT_DROP_FILE && ev.drop.data) {
+                game.onFileDropped(ev.drop.data);
                 continue;
             }
             // Don't let the toggle key's character land in the console input.
@@ -443,20 +452,17 @@ const char* buildVersion() { return KEEL_COMMIT ", " KEEL_COMMIT_DATE; }
 // Replaces this process with a fresh one (Windows: starts it, then this one exits).
 void relaunch(const std::vector<std::string>& args) {
     std::vector<std::string> a = args;
+    const std::string exe = sys::executablePath();
 #ifdef _WIN32
-    char exe[1024] = {};
-    GetModuleFileNameA(nullptr, exe, sizeof exe);
     for (std::string& x : a)
         if (x.find(' ') != std::string::npos) x = "\"" + x + "\"";
-#else
-    const std::string exe = std::filesystem::read_symlink("/proc/self/exe").string();
 #endif
     std::vector<char*> argv;
     for (std::string& x : a) argv.push_back(x.data());
     argv.push_back(nullptr);
     log::info("Restarting");
 #ifdef _WIN32
-    _spawnv(_P_NOWAIT, exe, argv.data());
+    _spawnv(_P_NOWAIT, exe.c_str(), argv.data());
 #else
     execv(exe.c_str(), argv.data());
     log::error("Restart failed");

@@ -1,4 +1,5 @@
-# Builds Fry3DX for Linux (a portable .tar.gz and an AppImage), Windows (.zip) and Android (.apk).
+# Builds Fry3DX for Linux (a portable .tar.gz and an AppImage), Windows (.zip), macOS (.zip with one
+# app for Apple silicon and Intel) and Android (.apk).
 # A tag v* (git tag v0.4.0 && git push --tags) also makes a GitHub release with them;
 # otherwise they're the run's artifacts (Actions tab).
 # Android signing: secrets FRY_KEYSTORE_B64 (the keystore, base64) and FRY_KEYSTORE_PASS. Keep
@@ -53,6 +54,31 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: windows, path: "dist/*" }
 
+  macos:
+    # Built twice (Apple silicon, and Intel cross-built on the same Mac), then joined into one app.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install ninja shaderc
+          # MoltenVK (Vulkan on Metal), for both kinds of Mac, carried inside the app.
+          curl -sfL https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-macos.tar | tar -x -C "$RUNNER_TEMP"
+          MVK=$(find "$RUNNER_TEMP" -name libMoltenVK.dylib -path '*macOS*' | head -1)
+          lipo -info "$MVK"
+          echo "MVK=$MVK" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          for arch in arm64 x64; do
+            cmake --preset macos-$arch -DFRY_MOLTENVK="$MVK"
+            cmake --build build/macos-$arch
+          done
+          cmake --build build/macos-arm64 --target check
+      - name: Package
+        run: python3 tools/package.py macos
+      - uses: actions/upload-artifact@v4
+        with: { name: macos, path: "dist/*" }
+
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -77,7 +103,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, android]
+    needs: [linux, windows, macos, android]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:

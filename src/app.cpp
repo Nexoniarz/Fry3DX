@@ -790,7 +790,8 @@ private:
     glm::vec3 bedFor_{0.0f};
     // Closing, New or Open with changes not saved: asked first (askSave_), then done; afterSave_:
     // what to do once the Save it chose has finished (0 nothing, 1 quit, 2 new, 3 open).
-    int askSave_ = 0, afterSave_ = 0;
+    int askSave_ = 0, afterSave_ = 0; // (what to do then: 1 quit, 2 new, 3 open..., 4 open dropped_)
+    std::string dropped_;
     bool dialogCancelled_ = false;
     // Autosave: a copy packed small in the background every fry_autosave minutes while there are
     // changes, kept until saved or closed properly; offered back after a crash.
@@ -1138,6 +1139,18 @@ private:
         if (action == 1) dropAutosave(), keel::execute("quit");
         else if (action == 2) newScene();
         else if (action == 3) dialog(1);
+        else if (action == 4) openFile(std::exchange(dropped_, std::string()));
+    }
+    // A file dropped on the window (or opened with Fry3DX from the desktop): a .fry opens (after
+    // asking about changes), a script goes in the Script panel, a picture goes on as a reference
+    // (or, in the Paint tab, as a sticker on the model).
+    void onFileDropped(const std::string& path) override {
+        std::string ext = stdfs::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (ext == ".fry") return (void)(dropped_ = path, whenSaved(4));
+        if (ext == ".lua") return openScript(path, fileName(path));
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga") return tab_ == Tab::Paint ? floatFromFile(path) : addPicture(path);
+        say("Fry3DX opens .fry files, scripts (.lua) and pictures");
     }
     void saveQuestion() {
         if (!askSave_) return;
@@ -6493,6 +6506,8 @@ private:
         rows("Painting", {{"B / E / G / I", "Brush / eraser / fill / pick a colour"}, {"Alt+click", "Pick a colour"}, {"[ / ]", "Smaller / bigger brush"},
                           {"Ctrl+V", "Paste a picture onto it"}, {"Enter / Esc", "Place the picture / cancel"}, {"Shift + corner drag", "Resize keeping its shape"},
                           {"Wheel, middle or right drag", "Zoom and move the Picture panel"}});
+        rows("Sculpting", {{"Tab (Paint tab)", "Colour or Sculpt"}, {"1 - 6", "Raise, puff out, smooth, flatten, pinch, grab"}, {"Ctrl + brush", "The other way (dig, shrink, push apart)"},
+                           {"Shift + brush", "Smooth"}, {"X", "The same on both sides"}, {"[ / ]", "Smaller / bigger brush"}});
         rows("Selecting", {{"Click", "Select"}, {"Drag", "Select with a box, brush or lasso (Tool options)"}, {"Shift + click", "Objects: add to the selection. Shape: a whole loop"},
                            {"Ctrl + click", "Objects: take away. Shape: add or take one"}, {"Shift+Ctrl + click an edge", "The ring across it (shape)"}, {"Alt+click / double-click", "A whole loop (shape editing)"}, {"Ctrl+A / Alt+A", "All / none"},
                            {"Ctrl+I", "Invert"}, {"Ctrl + / Ctrl -", "More / less"}, {"L", "Everything joined to it"}, {"Esc", "Let go / cancel / leave shape editing"}});

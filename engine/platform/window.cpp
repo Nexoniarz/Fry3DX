@@ -21,7 +21,14 @@ namespace {
 // one) unless asked. Vulkan picks the discrete GPU itself; this makes OpenGL do the same. Set
 // before SDL loads the GL library; anything the user already set wins. KEEL_IGPU=1 opts out.
 void preferDedicatedGpu() {
-#ifndef _WIN32
+#if defined(__APPLE__)
+    // macOS has no Vulkan of its own: the app carries MoltenVK (Vulkan on Metal) in
+    // Contents/Frameworks. (Unless the user pointed SDL somewhere else.)
+    if (const char* base = SDL_GetBasePath(); base && !SDL_GetHint(SDL_HINT_VULKAN_LIBRARY)) {
+        const std::filesystem::path mvk = std::filesystem::path(base) / ".." / "Frameworks" / "libMoltenVK.dylib";
+        if (std::filesystem::exists(mvk)) SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, mvk.lexically_normal().string().c_str());
+    }
+#elif !defined(_WIN32)
     if (std::getenv("KEEL_IGPU")) return;
     if (std::filesystem::exists("/proc/driver/nvidia")) { // NVIDIA's own driver: PRIME render offload
         setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 0);

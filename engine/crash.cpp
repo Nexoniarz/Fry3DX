@@ -1,6 +1,7 @@
 #include "crash.h"
 
 #include <core/log.h>
+#include <core/sysinfo.h>
 
 #include <SDL3/SDL.h>
 
@@ -122,17 +123,6 @@ void onSignal(int sig) {
 }
 #endif
 
-bool debuggerAttached() {
-#ifdef _WIN32
-    return IsDebuggerPresent();
-#else
-    std::ifstream f("/proc/self/status");
-    for (std::string line; std::getline(f, line);)
-        if (line.rfind("TracerPid:", 0) == 0) return std::atoi(line.c_str() + 10) != 0;
-    return false;
-#endif
-}
-
 void watchdog() {
     constexpr double kTimeout = 45.0;
     for (;;) {
@@ -141,7 +131,7 @@ void watchdog() {
             g_beat = seconds();
             continue;
         }
-        if (seconds() - g_beat < kTimeout || debuggerAttached()) continue;
+        if (seconds() - g_beat < kTimeout || sys::debuggerAttached()) continue;
 #ifndef _WIN32
         pthread_kill(g_main, SIGUSR2); // its handler reports from the stuck thread (its backtrace)
         std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -153,12 +143,8 @@ void watchdog() {
 
 void install(const std::string& prefPath, const std::vector<std::string>& args, bool dog) {
     g_report = prefPath + "crash.txt";
-#ifdef _WIN32
-    char exe[1024] = {};
-    GetModuleFileNameA(nullptr, exe, sizeof exe);
-    g_exe = exe;
-#else
-    g_exe = std::filesystem::read_symlink("/proc/self/exe").string();
+    g_exe = sys::executablePath();
+#ifndef _WIN32
     g_main = pthread_self();
 #endif
     g_args = {g_exe, "-crashreport", g_report, "--"};

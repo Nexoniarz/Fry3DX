@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Fry3DX.app's Info.plist (filled in by CMake: src/CMakeLists.txt). -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Fry3DX</string>
+  <key>CFBundleDisplayName</key><string>Fry3DX</string>
+  <key>CFBundleExecutable</key><string>Fry3DX</string>
+  <key>CFBundleIdentifier</key><string>io.github.nexoniarz.fry3dx</string>
+  <key>CFBundleIconFile</key><string>fry3dx</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>${PROJECT_VERSION}</string>
+  <key>CFBundleVersion</key><string>${PROJECT_VERSION}</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright 2026 Nexoniarz. Apache License 2.0.</string>
+  <key>LSMinimumSystemVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <!-- .fry files open in it from the Finder (they arrive as a dropped file). -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>io.github.nexoniarz.fry3dx.fry</string>
+      <key>UTTypeDescription</key><string>Fry3DX model</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeIconFile</key><string>fry3dx</string>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>fry</string></array></dict>
+    </dict>
+  </array>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Fry3DX model</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>io.github.nexoniarz.fry3dx.fry</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>

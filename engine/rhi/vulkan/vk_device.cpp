@@ -46,6 +46,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 
 bool Device::init(const Window& window, bool validation) {
     window_ = &window;
+#if defined(__APPLE__)
+    // The library SDL loaded for the window (the app's MoltenVK, or a Vulkan SDK's loader).
+    if (auto gipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr())) volkInitializeCustom(gipa);
+    else
+#endif
     if (volkInitialize() != VK_SUCCESS) {
         log::error("No Vulkan loader found - is a Vulkan driver installed?");
         return false;

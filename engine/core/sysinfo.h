@@ -18,4 +18,9 @@ struct Memory {
 };
 Memory memory();
 
+// This program's file (for starting it again: crash reports, restarts). Empty if unknown.
+std::string executablePath();
+// Is a debugger watching (the freeze watchdog waits then)?
+bool debuggerAttached();
+
 } // namespace keel::sys

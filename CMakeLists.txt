@@ -30,18 +30,26 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Where the content goes: next to the program; on a Mac, inside the app (Fry3DX.app/Contents/
+# Resources, where SDL_GetBasePath points).
+if(APPLE)
+  set(FRY_CONTENT_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Fry3DX.app/Contents/Resources)
+else()
+  set(FRY_CONTENT_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+endif()
+
 include(cmake/Dependencies.cmake)
 include(cmake/Shaders.cmake)
 
 add_subdirectory(engine)
 add_subdirectory(src)
 
-# Content next to the program: bin/engine/ (the engine's: fonts, sky, config); bin/Fry3DX/ (the app's own, none yet).
+# Content next to the program: engine/ (the engine's: fonts, sky, config); Fry3DX/ (the app's own: scripts, branding).
 add_custom_target(content ALL
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/content ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/engine/fonts ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Fry3DX
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/content ${FRY_CONTENT_DIR}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${FRY_CONTENT_DIR}/engine/fonts ${FRY_CONTENT_DIR}/Fry3DX
   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dejavu_SOURCE_DIR}/ttf/DejaVuSans.ttf ${dejavu_SOURCE_DIR}/ttf/DejaVuSans-Bold.ttf
-          ${dejavu_SOURCE_DIR}/LICENSE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/engine/fonts/
+          ${dejavu_SOURCE_DIR}/LICENSE ${FRY_CONTENT_DIR}/engine/fonts/
   COMMENT "Copying content" VERBATIM)
 
 enable_testing()

@@ -4,11 +4,13 @@
     Fry3DX-<version>-linux-x64.tar.gz     from build/portable (cmake --preset portable)
     Fry3DX-<version>-linux-x64.AppImage   the same, as one file (needs appimagetool: $APPIMAGETOOL or on PATH)
     Fry3DX-<version>-windows-x64.zip      from build/windows, or build/<dir> given with --windows-bin
+    Fry3DX-<version>-macos.zip            from build/macos-arm64 and build/macos-x64 (on a Mac): one
+                                          Fry3DX.app for Apple silicon and Intel
 
-    python3 tools/package.py linux|appimage|windows [--bin DIR]
+    python3 tools/package.py linux|appimage|windows|macos [--bin DIR]
 
-Each unpacks to one Fry3DX/ folder: the program, its content (engine/, Fry3DX/), LICENSE and a
-README.txt. (The Android APK: android/build_apk.py.)
+Each unpacks to one Fry3DX/ folder: the program, its content (engine/, Fry3DX/; on a Mac inside
+the app), LICENSE and a README.txt. (The Android APK: android/build_apk.py.)
 """
 import os
 import shutil
@@ -26,7 +28,7 @@ A 3D modeller that does what you'd expect: pick a tool, click, drag.
 Made by Nexoniarz - https://nexoniarz.github.io/Fry3DX/
 
 Start: {start}
-Needs a graphics card with Vulkan (or OpenGL 4.6). F1 in the app lists every key.
+Needs {needs}. F1 in the app lists every key.
 Your settings and autosaves: {prefs}
 
 Open source under the Apache License 2.0 (LICENSE). Sky pictures: Poly Haven, CC0.
@@ -41,6 +43,15 @@ def version():
     return "0"
 
 
+PC_NEEDS = "a graphics card with Vulkan (or OpenGL 4.6)"
+
+
+def readme(folder, start, prefs, needs=PC_NEEDS, crlf=False):
+    shutil.copy2(os.path.join(ROOT, "LICENSE"), folder)
+    with open(os.path.join(folder, "README.txt"), "w", newline="\r\n" if crlf else "\n") as f:
+        f.write(README.format(version=version(), start=start, prefs=prefs, needs=needs))
+
+
 def stage(bin_dir, exe, extra, start, prefs):
     out = os.path.join(DIST, "stage", "Fry3DX")
     shutil.rmtree(os.path.dirname(out), ignore_errors=True)
@@ -49,9 +60,7 @@ def stage(bin_dir, exe, extra, start, prefs):
         shutil.copy2(os.path.join(bin_dir, name), out)
     for d in ("engine", "Fry3DX"):
         shutil.copytree(os.path.join(bin_dir, d), os.path.join(out, d))
-    shutil.copy2(os.path.join(ROOT, "LICENSE"), out)
-    with open(os.path.join(out, "README.txt"), "w", newline="\r\n" if exe.endswith(".exe") else "\n") as f:
-        f.write(README.format(version=version(), start=start, prefs=prefs))
+    readme(out, start, prefs, crlf=exe.endswith(".exe"))
     return out
 
 
@@ -94,6 +103,35 @@ def windows(bin_dir):
     return path
 
 
+def macos(bin_dir):
+    """One Fry3DX.app for both kinds of Mac: the Apple silicon build's app, its program joined
+    (lipo) with the Intel build's; signed ad hoc (no Apple account: enough to run, with a right-click
+    Open the first time)."""
+    arm = os.path.join(bin_dir, "Fry3DX.app")
+    intel = os.path.join(ROOT, "build", "macos-x64", "bin", "Fry3DX.app")
+    out = os.path.join(DIST, "stage", "Fry3DX")
+    shutil.rmtree(os.path.dirname(out), ignore_errors=True)
+    os.makedirs(out)
+    app = os.path.join(out, "Fry3DX.app")
+    shutil.copytree(arm, app, symlinks=True)
+    exe = os.path.join("Contents", "MacOS", "Fry3DX")
+    if os.path.exists(os.path.join(intel, exe)):
+        subprocess.run(["lipo", "-create", os.path.join(arm, exe), os.path.join(intel, exe), "-output", os.path.join(app, exe)], check=True)
+        kind = "macos"
+    else:
+        print("(no build/macos-x64: Apple silicon only)")
+        kind = "macos-arm64"
+    subprocess.run(["strip", "-x", os.path.join(app, exe)], check=True)
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", app], check=True)
+    readme(out, "Fry3DX.app (move it to Applications if you like). The first time: right-click it, Open,\n"
+                "       as it isn't from the App Store", "~/Library/Application Support/Nexoniarz/Fry3DX",
+           "macOS 13.3 or newer; Vulkan through MoltenVK (inside the app), else OpenGL 4.1")
+    path = os.path.join(DIST, f"Fry3DX-{version()}-{kind}.zip")
+    # (ditto keeps what a Mac app needs: links, permissions, the signature)
+    subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", out, path], check=True)
+    return path
+
+
 def main():
     args = sys.argv[1:]
     bin_dir = None
@@ -103,8 +141,8 @@ def main():
         del args[i:i + 2]
     os.makedirs(DIST, exist_ok=True)
     for what in args:
-        default = {"linux": "build/portable/bin", "appimage": "build/portable/bin", "windows": "build/windows/bin"}[what]
-        path = {"linux": linux, "appimage": appimage, "windows": windows}[what](bin_dir or os.path.join(ROOT, default))
+        default = {"linux": "build/portable/bin", "appimage": "build/portable/bin", "windows": "build/windows/bin", "macos": "build/macos-arm64/bin"}[what]
+        path = {"linux": linux, "appimage": appimage, "windows": windows, "macos": macos}[what](bin_dir or os.path.join(ROOT, default))
         print(f"{os.path.relpath(path, ROOT)}: {os.path.getsize(path) / 1048576:.1f} MB")
     shutil.rmtree(os.path.join(DIST, "stage"), ignore_errors=True)
 
