@@ -60,6 +60,8 @@ int main() {
     r = runScript(host, "local o = fry.add('cube')\no.material = 'Gold'\nlocal m = fry.add('cube', {color = '#102030', material = 'glossy'})\nprint(#fry.materials())");
     CHECK(r.ok && scene.objects.back().metal == 0.0f && scene.objects.back().rough < 0.2f && scene.objects.back().color.r < 0.1f, "a material keeping its colour (%s)", r.error.c_str());
     CHECK(scene.objects[scene.objects.size() - 2].metal == 1.0f && scene.objects[scene.objects.size() - 2].color.g > 0.7f, "gold");
+    r = runScript(host, "local b = fry.add('sphere', {radius = 1})\nb:sculpt('raise', {0, 0, 1}, 0.4, 1, 20)\nlocal lo, hi = b:bounds()\nprint(hi.z > 1.05)");
+    CHECK(r.ok && out.find("true\n") != std::string::npos, "o:sculpt raises the top (%s)", r.error.c_str());
     r = runScript(host, "fry.add('cube').material = 'cheese'");
     CHECK(!r.ok && r.error.find("no material called cheese") != std::string::npos, "an unknown material is an error");
     r = runScript(host, "fry.clear()");

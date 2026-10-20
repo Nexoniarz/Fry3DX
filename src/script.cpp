@@ -1,4 +1,5 @@
 #include "script.h"
+#include "sculpt.h"
 #include "shapes.h"
 
 // (Lua is built as C++ here — cmake/Dependencies.cmake — so its errors are exceptions and unwind
@@ -332,6 +333,30 @@ int objSubdivide(lua_State* L) {
     lua_settop(L, 1);
     return 1;
 }
+// o:sculpt("raise", at, radius, strength, times): a brush pressed at a point (the scene's space),
+// like the Sculpt brushes. Made finer first if it has too few points, as in the app.
+int objSculpt(lua_State* L) {
+    Object& o = object(L, 1);
+    static const std::pair<const char*, std::pair<SculptBrush, bool>> names[] = {
+        {"raise", {SculptBrush::Draw, false}}, {"dig", {SculptBrush::Draw, true}},          {"puff", {SculptBrush::Inflate, false}},
+        {"shrink", {SculptBrush::Inflate, true}}, {"smooth", {SculptBrush::Smooth, false}}, {"flatten", {SculptBrush::Flatten, false}},
+        {"pinch", {SculptBrush::Pinch, false}},  {"spread", {SculptBrush::Pinch, true}},
+    };
+    const std::string name = lower(luaL_checkstring(L, 2));
+    const auto* it = std::find_if(std::begin(names), std::end(names), [&](const auto& n) { return name == n.first; });
+    if (it == std::end(names)) return luaL_error(L, "there's no brush called %s (raise, dig, puff, shrink, smooth, flatten, pinch, spread)", name.c_str());
+    const glm::mat4 inv = glm::inverse(objectMatrix(o));
+    const float scale = (std::abs(o.scale.x) + std::abs(o.scale.y) + std::abs(o.scale.z)) / 3.0f;
+    Dab dab{glm::vec3(inv * glm::vec4(toVec(L, 3), 1.0f)), float(luaL_optnumber(L, 4, 0.2)) / std::max(scale, 1e-6f), float(std::clamp(luaL_optnumber(L, 5, 0.5), 0.0, 1.0)), it->second.second};
+    const int times = std::clamp(int(luaL_optinteger(L, 6, 1)), 1, 1000);
+    if (o.hasFinish()) o.mesh = finishedMesh(o), o.mirror = 0, o.round = 0, o.smoothLevels = 0;
+    if (finerForSculpting(o.mesh)) o.smooth = true;
+    const SculptMesh sm(o.mesh);
+    for (int i = 0; i < times; ++i) sculptDab(o.mesh, sm, it->second.first, dab);
+    handMade(o);
+    lua_settop(L, 1);
+    return 1;
+}
 int objBevel(lua_State* L) {
     Object& o = object(L, 1);
     const float width = float(luaL_checknumber(L, 2));
@@ -480,7 +505,7 @@ int objDrop(lua_State* L) { // stands it on the ground (z = 0)
 const luaL_Reg kMethods[] = {
     {"move", objMove},       {"rotate", objRotate},     {"scale", objScale},       {"delete", objDelete},   {"copy", objCopy},
     {"add", objAdd},         {"subtract", objSubtract}, {"overlap", objOverlap},   {"join", objJoin},       {"thicken", objThicken},
-    {"subdivide", objSubdivide}, {"bevel", objBevel},   {"bake", objBake},         {"points", objPoints},   {"faces", objFaces},
+    {"subdivide", objSubdivide}, {"sculpt", objSculpt}, {"bevel", objBevel},   {"bake", objBake},         {"points", objPoints},   {"faces", objFaces},
     {"setpoints", objSetPoints}, {"setshape", objSetShape}, {"set", objSet},       {"settings", objSettings}, {"bounds", objBounds},
     {"select", objSelect},   {"drop", objDrop},         {nullptr, nullptr},
 };
@@ -811,6 +836,8 @@ An object (o):
   o:copy()  o:delete()  o:select()  o:bounds() -> lowest, highest corner
   o:add(others...)  o:subtract(others...)  o:overlap(others...)  o:join(others...)   (the others go)
   o:thicken(t)  o:subdivide(smooth, times)  o:bevel(width, steps, angle)  o:bake()
+  o:sculpt(brush, at, radius, strength, times)   brush: raise, dig, puff, shrink, smooth,
+      flatten, pinch, spread; at: a point on it (the scene's space). Made finer first if needed
   o:points()  o:faces()  o:setpoints(points)  o:setshape(points, faces)  o:set(name, value)  o:settings()
 )";
 }

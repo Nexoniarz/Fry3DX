@@ -174,6 +174,45 @@ void drawIcon(ImDrawList* dl, Icon icon, ImVec2 o, float s, ImU32 c) {
         }
         break;
     }
+    // Sculpting: a line of surface, and what the brush does to it.
+    case Icon::Sculpt: { // a bump raised, an arrow up out of it
+        const ImVec2 pts[] = {P(0.08f, 0.80f), P(0.30f, 0.78f), P(0.42f, 0.58f), P(0.58f, 0.58f), P(0.70f, 0.78f), P(0.92f, 0.80f)};
+        dl->AddPolyline(pts, 6, c, 0, t * 1.2f);
+        line(0.5f, 0.48f, 0.5f, 0.24f), tri(0.5f, 0.08f, 0.38f, 0.26f, 0.62f, 0.26f);
+        break;
+    }
+    case Icon::Inflate:
+        dl->AddCircle(P(0.5f, 0.5f), 0.2f * s, c, 24, t);
+        for (int i = 0; i < 4; ++i) {
+            const float a = 0.785f + 1.5708f * float(i), x = std::cos(a), y = std::sin(a);
+            line(0.5f + x * 0.28f, 0.5f + y * 0.28f, 0.5f + x * 0.42f, 0.5f + y * 0.42f);
+        }
+        break;
+    case Icon::Smooth: { // bumps above, evened out below
+        ImVec2 pts[9];
+        for (int i = 0; i < 9; ++i) pts[i] = P(0.1f + 0.1f * float(i), 0.3f + (i % 2 ? -0.1f : 0.08f));
+        dl->AddPolyline(pts, 9, dim, 0, t);
+        dl->PathArcTo(P(0.5f, 1.25f), 0.62f * s, 3.14159f * 1.2f, 3.14159f * 1.8f, 20);
+        dl->PathStroke(c, 0, t * 1.2f);
+        break;
+    }
+    case Icon::Flatten: // a bump pressed flat by a bar
+        dl->AddRectFilled(P(0.2f, 0.18f), P(0.8f, 0.32f), c, 0.04f * s);
+        line(0.5f, 0.36f, 0.5f, 0.5f), tri(0.5f, 0.62f, 0.4f, 0.48f, 0.6f, 0.48f);
+        line(0.08f, 0.78f, 0.92f, 0.78f, t * 1.2f);
+        break;
+    case Icon::Pinch: // two sides pulled in to a crease
+        line(0.08f, 0.5f, 0.34f, 0.5f), tri(0.46f, 0.5f, 0.32f, 0.4f, 0.32f, 0.6f);
+        line(0.92f, 0.5f, 0.66f, 0.5f), tri(0.54f, 0.5f, 0.68f, 0.4f, 0.68f, 0.6f);
+        line(0.5f, 0.2f, 0.5f, 0.8f, t * 0.7f);
+        break;
+    case Icon::Grab: { // a patch of surface pulled up and over
+        const ImVec2 pts[] = {P(0.08f, 0.82f), P(0.32f, 0.80f), P(0.46f, 0.50f), P(0.62f, 0.34f), P(0.72f, 0.80f), P(0.92f, 0.82f)};
+        dl->AddPolyline(pts, 6, c, 0, t * 1.2f);
+        dot(0.62f, 0.34f, 0.08f);
+        line(0.62f, 0.34f, 0.84f, 0.16f, t * 0.8f), tri(0.92f, 0.08f, 0.78f, 0.12f, 0.88f, 0.22f);
+        break;
+    }
     case Icon::LayFlat:
         quad(0.22f, 0.40f, 0.62f, 0.22f, 0.86f, 0.50f, 0.46f, 0.68f, false, c);
         line(0.10f, 0.88f, 0.90f, 0.88f);

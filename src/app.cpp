@@ -7,6 +7,7 @@
 #include "mesh.h"
 #include "scene.h"
 #include "script.h"
+#include "sculpt.h"
 #include "shapes.h"
 
 #include <SDL3/SDL.h>
@@ -139,6 +140,22 @@ top.position = {0, 0, 0.7}
 fry.frame()
 )";
 const MaterialInfo kMaterials[] = {{"PLA", 1.24f}, {"PETG", 1.27f}, {"ABS", 1.04f}, {"ASA", 1.07f}, {"TPU", 1.21f}, {"Nylon", 1.14f}, {"Resin", 1.12f}};
+
+struct SculptToolInfo {
+    SculptBrush brush;
+    Icon icon;
+    const char* name;
+    const char* key;
+    const char* hint;
+};
+const SculptToolInfo kSculptTools[] = {
+    {SculptBrush::Draw, Icon::Sculpt, "Raise", "1", "Builds the surface up where you brush. Ctrl digs in instead."},
+    {SculptBrush::Inflate, Icon::Inflate, "Puff out", "2", "Swells it out all round, like blowing it up. Ctrl shrinks it."},
+    {SculptBrush::Smooth, Icon::Smooth, "Smooth", "3", "Evens out bumps. Hold Shift with any brush to smooth."},
+    {SculptBrush::Flatten, Icon::Flatten, "Flatten", "4", "Presses it flat, like a palette knife."},
+    {SculptBrush::Pinch, Icon::Pinch, "Pinch", "5", "Pulls it in towards the middle of the brush: sharp creases and ridges. Ctrl pushes apart."},
+    {SculptBrush::Grab, Icon::Grab, "Grab", "6", "Take hold of a patch and drag it where it should be."},
+};
 
 const PaintToolInfo kPaintTools[] = {
     {PaintTool::Brush, Icon::PaintBrush, "Brush", "B", "Paint on the model or on the flat picture. Alt+click picks a colour; [ and ] change the size."},
@@ -290,6 +307,20 @@ public:
             if (a.size() > 2) self->view_ = View::Perspective, self->fov_ = 50, self->yaw_ = std::stof(a[1]), self->pitch_ = std::stof(a[2]);
             if (a.size() > 3) self->dist_ = std::stof(a[3]);
         }, "Fry3DX: fry_orbit yaw pitch [distance]");
+        // A sculpt stroke across the view (0..1 of it), for pictures of it: brush 1-6, then from and to.
+        static keel::Cmd sculptStroke("fry_sculpt", [](const keel::Args& a) {
+            if (a.size() < 6) return;
+            const int brush = std::clamp(std::stoi(a[1]) - 1, 0, int(std::size(kSculptTools)) - 1);
+            self->sculptBrush_ = kSculptTools[brush].brush;
+            const bool other = a.size() > 6 && a[6] == "invert";
+            const auto at = [&](float t) {
+                const ImVec2 lo = self->viewMin_, hi = self->viewMax_;
+                return ImVec2(lo.x + (hi.x - lo.x) * glm::mix(std::stof(a[2]), std::stof(a[4]), t), lo.y + (hi.y - lo.y) * glm::mix(std::stof(a[3]), std::stof(a[5]), t));
+            };
+            self->sculptAt(at(0), true, other, false);
+            for (int i = 1; i <= 60; ++i) self->sculptAt(at(float(i) / 60.0f), false, other, false);
+            self->endSculpt();
+        }, "Fry3DX: fry_sculpt brush x0 y0 x1 y1 [invert] (0..1 of the view)");
         static keel::Cmd sel("fry_select", [](const keel::Args& a) {
             self->selected_.clear();
             for (const Object& o : self->scene_.objects)
@@ -340,8 +371,9 @@ public:
         static keel::Cmd frame("fry_frame", [](const keel::Args&) { self->frameAll(); }, "Fry3DX: frame everything");
         static keel::Cmd tab("fry_tab", [](const keel::Args& a) {
             if (a.size() > 1)
-                self->setTab(a[1] == "paint" ? Tab::Paint : a[1] == "layout" ? Tab::Layout : a[1] == "render" ? Tab::Render : a[1] == "print" ? Tab::Print : Tab::Model);
-        }, "Fry3DX: fry_tab model|paint|render");
+                self->setTab(a[1] == "paint" || a[1] == "sculpt" ? Tab::Paint : a[1] == "layout" ? Tab::Layout : a[1] == "render" ? Tab::Render : a[1] == "print" ? Tab::Print : Tab::Model);
+            if (a.size() > 1) self->sculpting_ = a[1] == "sculpt";
+        }, "Fry3DX: fry_tab model|paint|sculpt|layout|render|print");
         // (points as parts of the view: 0..1 across, 0..1 down)
         auto viewPoint = [](const std::string& x, const std::string& y) {
             return ImVec2(self->viewMin_.x + std::stof(x) * (self->viewMax_.x - self->viewMin_.x), self->viewMin_.y + std::stof(y) * (self->viewMax_.y - self->viewMin_.y));
@@ -688,6 +720,21 @@ private:
         glm::vec3 last{0.0f};
         glm::vec2 last2D{0.0f};
     } paint_;
+    // Sculpting (the Paint tab's Shape side): brushes that push the surface about like clay.
+    bool sculpting_ = false;
+    SculptBrush sculptBrush_ = SculptBrush::Draw;
+    float sculptStrength_ = 0.5f, sculptPx_ = 60.0f; // (its own brush size: sculpting wants a bigger one than painting)
+    bool sculptMirror_ = false; // the same on the other side (left and right: the object's Y)
+    struct SculptStroke {
+        bool active = false, haveLast = false, waiting = false;
+        uint32_t object = 0;
+        std::unique_ptr<SculptMesh> mesh;
+        glm::vec3 last{0.0f};
+        // Grab: where it was taken hold of (the world), and what (the object's own space).
+        glm::vec3 start{0.0f};
+        std::vector<std::pair<int, float>> held[2];
+        std::vector<glm::vec3> from[2];
+    } sculpt_;
     // A picture layer unlocked to be moved: which, and what's being dragged (a corner 0-3, 4 the
     // whole of it, 5 the turning handle) from where.
     struct LayerEdit {
@@ -1626,7 +1673,7 @@ private:
         if (t == tab_) return;
         if (drag_.active) cancelDrag();
         lockLayer();
-        endStroke();
+        endStroke(), endSculpt();
         knifePts_.clear(), drawPts_.clear();
         if (t != Tab::Model) leaveEdit();
         if ((t == Tab::Render || t == Tab::Print) && tool_ != Tool::Select && tool_ != Tool::Move && tool_ != Tool::Rotate && tool_ != Tool::Scale) tool_ = Tool::Move;
@@ -1949,6 +1996,107 @@ private:
         Image& img = changePicture(o);
         floodFill(img, glm::ivec2(uv * glm::vec2(img.w, img.h)), glm::vec4(glm::vec3(paintColor_), 1.0f), fillTolerance_);
         paint_.image.reset();
+    }
+
+    // ── Sculpting ──
+
+    // The object ready to sculpt: its finishing touches made part of it, and made finer (the same
+    // shape) if it has too few points to push about.
+    Object* readyToSculpt(uint32_t id) {
+        Object* o = find(id);
+        if (!o) return nullptr;
+        if (o->locked) return say("That object is locked"), nullptr;
+        pushUndo();
+        if (o->hasFinish()) {
+            o->mesh = finishedMesh(*o);
+            o->mirror = 0, o->round = 0, o->smoothLevels = 0;
+        }
+        handMade(*o);
+        if (finerForSculpting(o->mesh)) {
+            o->smooth = true;
+            say(std::format("{} was made finer to sculpt: {} points now, the same shape", o->name, o->mesh.verts.size()));
+        }
+        touched(o->id);
+        return o;
+    }
+    void endSculpt() {
+        if (!sculpt_.active) return;
+        sculpt_ = {};
+    }
+    // The brush at a point of the view: starts a stroke on what's there, or carries one on.
+    void sculptAt(ImVec2 mouse, bool start, bool ctrl, bool shift) {
+        const Ray ray = mouseRay(mouse);
+        const auto toLocal = [](const Object& o, float radius) { return radius * 3.0f / glm::max(glm::abs(o.scale.x) + glm::abs(o.scale.y) + glm::abs(o.scale.z), 1e-6f); };
+        const glm::vec3 other(1, -1, 1); // (the other side: the object's Y turned round)
+        if (start) {
+            const Hit h = pickObject(ray, 0, true);
+            if (!h.object) return;
+            selected_ = {h.object}, active_ = h.object;
+            Object* o = readyToSculpt(h.object);
+            if (!o) return;
+            sculpt_.active = true, sculpt_.object = o->id;
+            sculpt_.mesh = std::make_unique<SculptMesh>(o->mesh);
+            if (sculptBrush_ == SculptBrush::Grab && !shift) { // (made finer: the same shape, so the same spot)
+                sculpt_.start = ray.origin + ray.dir * h.t;
+                const glm::vec3 at = glm::vec3(glm::inverse(objectMatrix(*o)) * glm::vec4(sculpt_.start, 1.0f));
+                const float radius = toLocal(*o, sculptPx_ * pixelSize(sculpt_.start));
+                for (int side = 0; side < (sculptMirror_ ? 2 : 1); ++side) {
+                    sculpt_.held[side] = grabbed(o->mesh, side ? at * other : at, radius);
+                    for (const auto& [i, w] : sculpt_.held[side]) sculpt_.from[side].push_back(o->mesh.verts[size_t(i)]);
+                }
+            }
+        }
+        if (!sculpt_.active) return;
+        Object* o = find(sculpt_.object);
+        if (!o) return endSculpt();
+        const glm::mat4 inv = glm::inverse(objectMatrix(*o));
+        if (!sculpt_.from[0].empty()) { // grabbing: it follows the mouse across the view
+            const auto p = hitPlane(ray, sculpt_.start, forwardOf(yaw_, pitch_));
+            if (!p) return;
+            const glm::vec3 d = glm::vec3(inv * glm::vec4(*p - sculpt_.start, 0.0f));
+            moveGrabbed(o->mesh, sculpt_.held[0], sculpt_.from[0], d);
+            if (sculptMirror_) moveGrabbed(o->mesh, sculpt_.held[1], sculpt_.from[1], d * other);
+            return touched(o->id);
+        }
+        const Hit h = pickObject(ray, o->id, true);
+        if (!h.object) {
+            sculpt_.haveLast = false;
+            return;
+        }
+        const glm::vec3 at = ray.origin + ray.dir * h.t;
+        const float radius = sculptPx_ * pixelSize(at);
+        const SculptBrush brush = shift ? SculptBrush::Smooth : sculptBrush_;
+        const auto dab = [&](const glm::vec3& world) {
+            Dab d{glm::vec3(inv * glm::vec4(world, 1.0f)), toLocal(*o, radius), sculptStrength_, ctrl};
+            sculptDab(o->mesh, *sculpt_.mesh, brush, d);
+            if (sculptMirror_) d.at *= other, sculptDab(o->mesh, *sculpt_.mesh, brush, d);
+        };
+        // A dab every quarter of the brush along the way, not one a frame (fast strokes stay even).
+        const float gap = glm::distance(at, sculpt_.last);
+        if (!sculpt_.haveLast) dab(at);
+        else if (gap >= radius * 0.25f && gap < radius * 8) {
+            const int steps = int(gap / (radius * 0.25f));
+            for (int i = 1; i <= steps; ++i) dab(glm::mix(sculpt_.last, at, float(i) / float(steps)));
+        } else if (gap < radius * 0.25f)
+            return; // (not far enough for the next dab yet)
+        else
+            dab(at);
+        sculpt_.last = at, sculpt_.haveLast = true;
+        touched(o->id);
+    }
+    void sculptViewport(const ImGuiIO& io) {
+        if (sculpt_.waiting) {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) sculpt_.waiting = false;
+            else if (pickObject(mouseRay(io.MousePos), 0, true).object) sculpt_.waiting = false, sculptAt(io.MousePos, true, io.KeyCtrl, io.KeyShift);
+            return;
+        }
+        if (sculpt_.active) {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) return endSculpt();
+            return sculptAt(io.MousePos, false, io.KeyCtrl, io.KeyShift);
+        }
+        if (!mouseInView(io) || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+        if (pickObject(mouseRay(io.MousePos), 0, true).object) sculptAt(io.MousePos, true, io.KeyCtrl, io.KeyShift);
+        else sculpt_.waiting = sculptBrush_ != SculptBrush::Grab;
     }
 
     // ── Picture layers ──
@@ -4274,6 +4422,7 @@ private:
     }
     // Painting: on the model under the mouse.
     void paintViewport(ImGuiIO& io) {
+        if (sculpting_) return sculptViewport(io);
         if (paint_.waiting) {
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) paint_.waiting = false;
             else if (pickObject(mouseRay(io.MousePos), 0, true).object) paint_.waiting = false, paintAt(io.MousePos, true);
@@ -4340,13 +4489,19 @@ private:
         if (ctrl && key(ImGuiKey_1)) setTab(Tab::Model);
         if (ctrl && key(ImGuiKey_2)) setTab(Tab::Paint);
         if (ctrl && key(ImGuiKey_3)) setTab(Tab::Layout);
+        if (tab_ == Tab::Paint && !ctrl && !alt && key(ImGuiKey_Tab)) return (void)(sculpting_ = !sculpting_, endStroke(), endSculpt());
+        if (tab_ == Tab::Paint && sculpting_ && !ctrl && !alt)
+            for (int i = 0; i < int(std::size(kSculptTools)); ++i)
+                if (key(ImGuiKey(int(ImGuiKey_1) + i))) sculptBrush_ = kSculptTools[i].brush;
+        if (tab_ == Tab::Paint && sculpting_ && !ctrl && !alt && key(ImGuiKey_X)) sculptMirror_ = !sculptMirror_;
         if (tab_ == Tab::Paint && !ctrl && !alt) {
             if (key(ImGuiKey_B)) paintTool_ = PaintTool::Brush;
             if (key(ImGuiKey_E)) paintTool_ = PaintTool::Eraser;
             if (key(ImGuiKey_G)) paintTool_ = PaintTool::Fill;
             if (key(ImGuiKey_I)) paintTool_ = PaintTool::Picker;
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) brushPx_ = std::max(1.0f, brushPx_ / 1.2f);
-            if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) brushPx_ = std::min(500.0f, brushPx_ * 1.2f);
+            float& size = sculpting_ ? sculptPx_ : brushPx_;
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) size = std::max(1.0f, size / 1.2f);
+            if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) size = std::min(500.0f, size * 1.2f);
             if (key(ImGuiKey_Enter) || key(ImGuiKey_KeypadEnter)) lockLayer();
             if (key(ImGuiKey_Delete) && editLayer()) deleteLayer(*find(ledit_.object), ledit_.index);
             if (key(ImGuiKey_F1)) showHelp_ = !showHelp_;
@@ -4716,7 +4871,9 @@ private:
                     }
                 }
             }
-            if (mouseInView(io) && !editLayer() && paintTool_ != PaintTool::Picture)
+            if (sculpting_) {
+                if (mouseInView(io)) dl->AddCircle(io.MousePos, sculptPx_, io.KeyCtrl ? IM_COL32(120, 180, 255, 220) : IM_COL32(255, 255, 255, 200), 40, 1.5f);
+            } else if (mouseInView(io) && !editLayer() && paintTool_ != PaintTool::Picture)
                 dl->AddCircle(io.MousePos, brushPx_, paintTool_ == PaintTool::Fill || paintTool_ == PaintTool::Picker ? IM_COL32(255, 255, 255, 90) : IM_COL32(255, 255, 255, 200), 40, 1.5f);
             dl->PopClipRect();
             return;
@@ -5264,6 +5421,21 @@ private:
     }
 
     void paintToolbox(float w) {
+        const float half = (w - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (wideButton("##colour-side", Icon::PaintBrush, "Colour", !sculpting_, half, "Paint colours on it (Tab)")) sculpting_ = false, endSculpt();
+        ImGui::SameLine();
+        if (wideButton("##shape-side", Icon::Sculpt, "Sculpt", sculpting_, half, "Push its surface about like clay (Tab)")) sculpting_ = true, endStroke();
+        ImGui::Spacing();
+        if (sculpting_) {
+            grid(int(std::size(kSculptTools)), 38.0f, [&](int i) {
+                const SculptToolInfo& t = kSculptTools[i];
+                const std::string id = std::format("##{}", t.name), tip = std::format("{}  ({})\n{}", t.name, t.key, t.hint);
+                if (iconButton(id.c_str(), t.icon, sculptBrush_ == t.brush, tip.c_str())) sculptBrush_ = t.brush;
+            });
+            for (const SculptToolInfo& t : kSculptTools)
+                if (t.brush == sculptBrush_) ImGui::TextColored(accentText(), "%s", t.name);
+            return;
+        }
         grid(int(std::size(kPaintTools)), 38.0f, [&](int i) {
             const PaintToolInfo& t = kPaintTools[i];
             const std::string id = std::format("##{}", t.name), tip = std::format("{}  ({})\n{}", t.name, t.key, t.hint);
@@ -5283,7 +5455,48 @@ private:
             if (t.tool == paintTool_) ImGui::TextColored(accentText(), "%s", t.name);
     }
 
+    void sculptOptions(float w) {
+        for (const SculptToolInfo& t : kSculptTools)
+            if (t.brush == sculptBrush_) ImGui::SeparatorText(t.name), ImGui::TextWrapped("%s", t.hint);
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(w);
+        ImGui::SliderFloat("##size", &sculptPx_, 4.0f, 400.0f, "size %.0f px", ImGuiSliderFlags_Logarithmic);
+        if (sculptBrush_ != SculptBrush::Grab) {
+            ImGui::SetNextItemWidth(w);
+            ImGui::SliderFloat("##strength", &sculptStrength_, 0.02f, 1.0f, "strength %.2f");
+        }
+        ImGui::Checkbox("Same on both sides (X)", &sculptMirror_);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("What you do on its left is done on its right too");
+        if (Object* o = selected_.size() == 1 ? find(active_) : nullptr) {
+            ImGui::SeparatorText(o->name.c_str());
+            ImGui::TextDisabled("%zu points", o->mesh.verts.size());
+            size_t after = 0;
+            for (const auto& f : o->mesh.faces) after += f.size();
+            ImGui::BeginDisabled(after > 400000 || o->locked);
+            if (ImGui::Button("Finer, for small details", ImVec2(w, 0))) {
+                pushUndo();
+                if (o->hasFinish()) o->mesh = finishedMesh(*o), o->mirror = 0, o->round = 0, o->smoothLevels = 0;
+                handMade(*o);
+                subdivide(o->mesh, false);
+                touched(o->id);
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Each face split in four: the same shape, more points to push about");
+            if (ImGui::Button("Smooth all of it", ImVec2(w, 0)) && !o->locked) {
+                pushUndo();
+                handMade(*o);
+                const SculptMesh sm(o->mesh);
+                const glm::vec3 mid = (boundsMin(o->mesh) + boundsMax(o->mesh)) * 0.5f;
+                sculptDab(o->mesh, sm, SculptBrush::Smooth, {mid, glm::distance(boundsMin(o->mesh), boundsMax(o->mesh)) * 2.0f, 0.5f});
+                touched(o->id);
+            }
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Ctrl: the other way   Shift: smooth\n[ and ]: brush size   1-6: brushes");
+    }
+
     void paintOptions(float w) {
+        if (sculpting_) return sculptOptions(w);
         for (const PaintToolInfo& t : kPaintTools)
             if (t.tool == paintTool_) ImGui::SeparatorText(t.name);
         if (paintTool_ == PaintTool::Brush || paintTool_ == PaintTool::Eraser) {

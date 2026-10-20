@@ -4,6 +4,7 @@
 #include "image.h"
 #include "scene.h"
 #include "shapes.h"
+#include "sculpt.h"
 
 #include <cmath>
 #include <cstdio>
@@ -424,6 +425,36 @@ int main() {
     std::ifstream j(dir / "a.gltf");
     const std::string text((std::istreambuf_iterator<char>(j)), {});
     CHECK(text.find("\"translation\":[2,3,1]") != std::string::npos, "in glTF's axes (Y up): the position is [2,3,1]");
+
+    { // Sculpting: a cube made finer keeps its shape; brushes move only what's under them.
+        Mesh m = makeCube(1.0f);
+        const int times = finerForSculpting(m, 2000);
+        CHECK(times == 5 && m.verts.size() >= 2000 && closed(m) && boundsMax(m) == glm::vec3(0.5f), "a cube made finer for sculpting: %d times, %zu points, same box", times, m.verts.size());
+        const SculptMesh sm(m);
+        const Mesh before = m;
+        const glm::vec3 top(0, 0, 0.5f);
+        for (int i = 0; i < 20; ++i) sculptDab(m, sm, SculptBrush::Draw, {top, 0.25f, 1.0f});
+        CHECK(boundsMax(m).z > 0.55f && boundsMin(m) == boundsMin(before), "draw raises the top (%.3f) and leaves the rest", boundsMax(m).z);
+        CHECK(closed(m), "still closed after sculpting");
+        Mesh dug = before;
+        for (int i = 0; i < 20; ++i) sculptDab(dug, sm, SculptBrush::Draw, {top, 0.25f, 1.0f, true});
+        CHECK(boundsMax(dug).z == 0.5f, "inverted, it digs in: nothing above the top");
+        float rough = 0.0f, smooth = 0.0f; // how far the top's points are from flat
+        Mesh bumpy = m;
+        for (int i = 0; i < 10; ++i) sculptDab(bumpy, sm, SculptBrush::Smooth, {top, 0.3f, 1.0f});
+        for (size_t i = 0; i < m.verts.size(); ++i)
+            if (glm::length(glm::vec2(m.verts[i])) < 0.15f && m.verts[i].z > 0.4f) rough += m.verts[i].z - 0.5f, smooth += bumpy.verts[i].z - 0.5f;
+        CHECK(smooth < rough, "smoothing lowers the bump (%.3f to %.3f)", rough, smooth);
+        Mesh flat = m;
+        for (int i = 0; i < 30; ++i) sculptDab(flat, sm, SculptBrush::Flatten, {top, 0.3f, 1.0f});
+        CHECK(boundsMax(flat).z < boundsMax(m).z, "flatten presses it down");
+        Mesh g = before;
+        const auto held = grabbed(g, top, 0.2f);
+        std::vector<glm::vec3> from;
+        for (const auto& [i, w] : held) from.push_back(g.verts[size_t(i)]);
+        moveGrabbed(g, held, from, glm::vec3(0, 0, 0.3f));
+        CHECK(!held.empty() && std::abs(boundsMax(g).z - 0.8f) < 0.01f && closed(g), "grab pulls the middle up with it (%.3f)", boundsMax(g).z);
+    }
 
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "passed", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;
