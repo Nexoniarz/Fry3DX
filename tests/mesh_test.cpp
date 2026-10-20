@@ -1,5 +1,6 @@
 // The modelling core without a window: shapes are closed and face out, faces with dents
 // triangulate right, extrude / inset / merge keep the mesh whole, and files round-trip.
+#include "bvh.h"
 #include "mesh.h"
 #include "image.h"
 #include "scene.h"
@@ -361,6 +362,25 @@ int main() {
         transform(drill, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -1.5f)));
         CHECK(combine(a, drill, Combine::Subtract) && checkForPrint(a).closed() && checkForPrint(a).volume < 1.0f && checkForPrint(a).volume > 0.85f,
               "a cylinder drilled through a cube: closed, %g m3", checkForPrint(a).volume);
+    }
+    // The tree of boxes finds the same nearest hit as trying every triangle (and the same "in the way").
+    {
+        Mesh m = makeSphere(32, 16, 1.0f);
+        const glm::mat4 M = glm::translate(glm::mat4(1), glm::vec3(0.3f, -0.2f, 0.5f)) * glm::rotate(glm::mat4(1), 0.7f, glm::vec3(0, 1, 0));
+        const TriangleTree tree(m, M);
+        uint32_t seed = 7;
+        auto rnd = [&] { return (seed = seed * 1664525u + 1013904223u) / 4294967296.0f * 2 - 1; };
+        int same = 0, tries = 300;
+        for (int i = 0; i < tries; ++i) {
+            const glm::vec3 o(rnd() * 3, rnd() * 3, rnd() * 3 + 3), d = glm::normalize(glm::vec3(rnd(), rnd(), rnd() - 1.5f));
+            float best = 1e30f;
+            for (size_t f = 0; f < m.faces.size(); ++f)
+                for (const auto& t : triangulate(m, int(f)))
+                    if (auto h = rayTriangle(o, d, glm::vec3(M * glm::vec4(m.verts[size_t(t[0])], 1)), glm::vec3(M * glm::vec4(m.verts[size_t(t[1])], 1)), glm::vec3(M * glm::vec4(m.verts[size_t(t[2])], 1)))) best = std::min(best, *h);
+            const auto h = tree.nearest(o, d);
+            if ((best > 1e29f && !h) || (h && std::abs(h->t - best) < 1e-4f && tree.blocked(o, d, best + 1e-3f) && !tree.blocked(o, d, best - 1e-3f))) ++same;
+        }
+        CHECK(same == tries, "the tree of boxes finds what trying every triangle does (%d of %d)", same, tries);
     }
     // Shapes drawn and cut in, again and again inside the last cut, on a turned object (the shape
     // carried into its own space, as the Draw tool does). This once built its tree forever and

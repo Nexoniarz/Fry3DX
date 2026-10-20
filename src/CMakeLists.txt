@@ -1,6 +1,6 @@
 # Fry3DX: the app (app.cpp) on the engine, and its modelling core (mesh, scene) as a library the
 # tests use too.
-add_library(fry_core STATIC mesh.cpp tools.cpp cut.cpp uv.cpp image.cpp sticker.cpp shapes.cpp scene.cpp package.cpp export.cpp print.cpp boolean.cpp modify.cpp sculpt.cpp)
+add_library(fry_core STATIC mesh.cpp bvh.cpp tools.cpp cut.cpp uv.cpp image.cpp sticker.cpp shapes.cpp scene.cpp package.cpp export.cpp print.cpp boolean.cpp modify.cpp sculpt.cpp)
 target_include_directories(fry_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(fry_core PUBLIC glm::glm libzstd_static)
 target_compile_definitions(fry_core PUBLIC GLM_ENABLE_EXPERIMENTAL)

@@ -3,6 +3,7 @@
 // and clear while you model (Solid), or properly lit (Rendered). The panels are Dear ImGui.
 //
 //   fry3dx [file.fry]
+#include "bvh.h"
 #include "commands.h"
 #include "icons.h"
 #include "mesh.h"
@@ -3966,14 +3967,26 @@ private:
         for (const Object& o : scene_.objects) {
             if (!o.visible || (only && o.id != only)) continue;
             const Mesh& mesh = base || (mode_ == Mode::Edit && o.id == active_) ? o.mesh : shownMesh(o);
-            const glm::mat4 m = objectMatrix(o);
-            std::vector<glm::vec3> w(mesh.verts.size());
-            for (size_t i = 0; i < w.size(); ++i) w[i] = glm::vec3(m * glm::vec4(mesh.verts[i], 1.0f));
-            for (size_t f = 0; f < mesh.faces.size(); ++f)
-                for (const auto& tri : triangulate(mesh, int(f)))
-                    if (auto t = hitTriangle(ray, w[size_t(tri[0])], w[size_t(tri[1])], w[size_t(tri[2])]); t && *t < best.t) best = {o.id, int(f), *t};
+            if (auto h = treeOf(o, mesh).nearest(ray.origin, ray.dir, best.t)) best = {o.id, h->face, h->t};
         }
         return best;
+    }
+    // Each object's triangles in the world, in a tree of boxes: made again only when it changes
+    // (its shape, where it is), not each time something's picked.
+    struct Tree {
+        uint64_t version = 0;
+        glm::mat4 matrix{0.0f};
+        size_t faces = 0;
+        fry::TriangleTree tree;
+    };
+    std::map<std::pair<uint32_t, bool>, Tree> trees_; // (an object's own mesh, or the one shown)
+    const fry::TriangleTree& treeOf(const Object& o, const Mesh& mesh) {
+        Tree& t = trees_[{o.id, &mesh != &o.mesh}];
+        const glm::mat4 m = objectMatrix(o);
+        const uint64_t version = versions_[o.id];
+        if (t.version != version || !version || t.matrix != m || t.faces != mesh.faces.size() || t.tree.points().size() != mesh.verts.size())
+            t.version = version, t.matrix = m, t.faces = mesh.faces.size(), t.tree = fry::TriangleTree(mesh, m);
+        return t.tree;
     }
     // Can the eye see this point of the object (nothing of it in the way)?
     bool visible(const Object& o, const glm::vec3& world) {
@@ -4000,48 +4013,16 @@ private:
         if (v.version == version && glm::distance(v.eye, eye_) < 1e-6f && v.vp == vp_ && v.point.size() == mesh.verts.size()) return v.point;
         v.version = version, v.eye = eye_, v.vp = vp_;
         v.point.assign(mesh.verts.size(), 1);
-        const glm::mat4 m = objectMatrix(o);
-        std::vector<glm::vec3> w(mesh.verts.size());
-        std::vector<glm::vec4> clip(w.size());
-        for (size_t i = 0; i < w.size(); ++i) w[i] = glm::vec3(m * glm::vec4(mesh.verts[i], 1.0f)), clip[i] = vp_ * glm::vec4(w[i], 1.0f);
-        std::vector<std::array<int, 3>> tris;
-        for (size_t f = 0; f < mesh.faces.size(); ++f)
-            for (const auto& t : triangulate(mesh, int(f))) tris.push_back(t);
-        constexpr int G = 64;
-        auto cell = [](float ndc) { return std::clamp(int((ndc * 0.5f + 0.5f) * G), 0, G - 1); };
-        std::vector<std::vector<int>> grid(G * G);
-        std::vector<int> everywhere; // (reaching behind the eye: in every square)
-        for (size_t t = 0; t < tris.size(); ++t) {
-            glm::vec2 lo(1e30f), hi(-1e30f);
-            bool behind = false;
-            for (int k : tris[t]) {
-                const glm::vec4 c = clip[size_t(k)];
-                if (c.w < 1e-5f) { behind = true; break; }
-                lo = glm::min(lo, glm::vec2(c) / c.w), hi = glm::max(hi, glm::vec2(c) / c.w);
-            }
-            if (behind) { everywhere.push_back(int(t)); continue; }
-            if (hi.x < -1 || hi.y < -1 || lo.x > 1 || lo.y > 1) continue; // (off the screen: covers nothing on it)
-            for (int y = cell(lo.y); y <= cell(hi.y); ++y)
-                for (int x = cell(lo.x); x <= cell(hi.x); ++x) grid[size_t(y * G + x)].push_back(int(t));
-        }
+        // (each point: is anything of it between the point and the eye)
+        const fry::TriangleTree& tree = treeOf(o, mesh);
+        const std::vector<glm::vec3>& w = tree.points();
         for (size_t i = 0; i < w.size(); ++i) {
-            const glm::vec4 c = clip[i];
-            if (c.w < 1e-5f) continue; // (behind the eye: not drawn anyway)
-            const glm::vec2 n = glm::vec2(c) / c.w;
-            if (std::abs(n.x) > 1 || std::abs(n.y) > 1) continue;
+            const glm::vec4 c = vp_ * glm::vec4(w[i], 1.0f);
+            if (c.w < 1e-5f || std::abs(c.x) > c.w || std::abs(c.y) > c.w) continue; // (off the screen: not drawn anyway)
             const glm::vec3 d = w[i] - eye_;
             const float len = glm::length(d);
-            const Ray ray{eye_, d / len};
-            const float limit = len - std::max(len * 0.002f, 0.0005f);
-            auto hides = [&](int t) {
-                const auto& tri = tris[size_t(t)];
-                if (tri[0] == int(i) || tri[1] == int(i) || tri[2] == int(i)) return false;
-                auto hit = hitTriangle(ray, w[size_t(tri[0])], w[size_t(tri[1])], w[size_t(tri[2])]);
-                return hit && *hit < limit;
-            };
-            if (std::any_of(everywhere.begin(), everywhere.end(), hides)) { v.point[i] = 0; continue; }
-            const auto& here = grid[size_t(cell(n.y) * G + cell(n.x))];
-            if (std::any_of(here.begin(), here.end(), hides)) v.point[i] = 0;
+            if (len < 1e-6f) continue;
+            if (tree.blocked(eye_, d / len, len - std::max(len * 0.002f, 0.0005f), int(i))) v.point[i] = 0;
         }
         return v.point;
     }
