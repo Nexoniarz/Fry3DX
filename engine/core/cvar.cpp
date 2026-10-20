@@ -31,7 +31,9 @@ Cvar::~Cvar() { std::erase(cvars(), this); }
 
 void Cvar::set(std::string_view value) {
     value_ = value;
-#if defined(__ANDROID__) // (the NDK's library has no float from_chars; bionic's locale is always "C")
+// (The NDK's library, and Apple's before macOS 26, have no float from_chars. strtof reads the
+// "C" locale's way: the program never sets another.)
+#if defined(__ANDROID__) || defined(__APPLE__)
     const std::string text(value);
     char* end = nullptr;
     const float parsed = std::strtof(text.c_str(), &end);
