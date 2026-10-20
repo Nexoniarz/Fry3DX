@@ -121,8 +121,14 @@ struct Look {
     float exposure = 1.0f, ao = 1.0f, bloom = 0.035f, saturation = 1.05f, vignette = 0.25f, sharpen = 0.3f, shadowSoft = 1.0f;
 };
 
+// A script kept in the file (the Script panel's list): run when you run it, never by itself.
+struct SceneScript {
+    std::string name, code;
+};
+
 struct Scene {
     Look look;
+    std::vector<SceneScript> scripts;
     std::vector<Object> objects;
     std::vector<Folder> folders;
     std::vector<Reference> references;
@@ -132,14 +138,25 @@ struct Scene {
 // Materials to start from: a colour (unless `keepColor`: only how metal and rough it is) and
 // how metal and rough. Shown in the view (Solid and Rendered) and exported with the object.
 struct MaterialPreset {
-    const char* id;   // as scripts name it
-    const char* name; // as shown
+    std::string id;   // as scripts name it (lower case)
+    std::string name; // as shown
     glm::vec3 color;  // sRGB
     float metal, rough;
     bool keepColor = false;
+    std::string from; // your own: who made it ("" saved from the picker; else a plug-in's or script's name)
 };
 const std::vector<MaterialPreset>& materialPresets();
-const MaterialPreset* findMaterial(std::string_view id);
+// Your own, after those: saved from the picker (ownMaterialsText, kept by the app) or made by
+// scripts and plug-ins (fry.material). One with the same id is replaced.
+const std::vector<MaterialPreset>& ownMaterials();
+void addOwnMaterial(MaterialPreset m);
+bool removeOwnMaterial(const std::string& id);
+void clearOwnMaterials(const std::string& from); // a plug-in's, when it's reloaded or turned off
+std::string materialId(const std::string& name);    // "Teal plastic" -> "teal plastic"
+// The picker's (from == "") as text, and back (added to the rest).
+std::string ownMaterialsText();
+void parseOwnMaterials(const std::string& text);
+const MaterialPreset* findMaterial(std::string_view id); // yours first
 void applyMaterial(Object& o, const MaterialPreset& m);
 
 glm::mat4 objectMatrix(const Object& o);

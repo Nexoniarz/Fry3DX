@@ -46,7 +46,61 @@ const std::vector<MaterialPreset>& materialPresets() {
     return list;
 }
 
+namespace {
+std::string quoted(const std::string& s);
+std::string readQuoted(std::istream& in);
+std::vector<MaterialPreset>& own() {
+    static std::vector<MaterialPreset> list;
+    return list;
+}
+} // namespace
+
+const std::vector<MaterialPreset>& ownMaterials() { return own(); }
+
+std::string materialId(const std::string& name) {
+    std::string id;
+    for (char c : name) id += char(std::tolower(static_cast<unsigned char>(c)));
+    while (!id.empty() && id.back() == ' ') id.pop_back();
+    return id;
+}
+
+void addOwnMaterial(MaterialPreset m) {
+    if (m.id.empty()) m.id = materialId(m.name);
+    if (m.name.empty()) m.name = m.id;
+    m.metal = std::clamp(m.metal, 0.0f, 1.0f), m.rough = std::clamp(m.rough, 0.0f, 1.0f), m.color = glm::clamp(m.color, 0.0f, 1.0f);
+    for (MaterialPreset& o : own())
+        if (o.id == m.id) return void(o = std::move(m));
+    own().push_back(std::move(m));
+}
+
+bool removeOwnMaterial(const std::string& id) { return std::erase_if(own(), [&](const MaterialPreset& m) { return m.id == id; }) > 0; }
+void clearOwnMaterials(const std::string& from) { std::erase_if(own(), [&](const MaterialPreset& m) { return m.from == from; }); }
+
+std::string ownMaterialsText() {
+    std::ostringstream out;
+    out.precision(6);
+    for (const MaterialPreset& m : own())
+        if (m.from.empty())
+            out << "material " << quoted(m.name) << " " << m.color.r << " " << m.color.g << " " << m.color.b << " " << m.metal << " " << m.rough << " "
+                << m.keepColor << "\n";
+    return out.str();
+}
+
+void parseOwnMaterials(const std::string& text) {
+    std::istringstream in(text);
+    for (std::string line; std::getline(in, line);) {
+        std::istringstream l(line);
+        std::string word;
+        if (!(l >> word) || word != "material") continue;
+        MaterialPreset m;
+        m.name = readQuoted(l);
+        if (l >> m.color.r >> m.color.g >> m.color.b >> m.metal >> m.rough >> m.keepColor; !m.name.empty() && l) addOwnMaterial(m);
+    }
+}
+
 const MaterialPreset* findMaterial(std::string_view id) {
+    for (const MaterialPreset& m : own())
+        if (id == m.id) return &m;
     for (const MaterialPreset& m : materialPresets())
         if (id == m.id) return &m;
     return nullptr;
@@ -147,6 +201,8 @@ std::string sceneText(const Scene& scene) {
         << " " << k.ground << " " << k.background.r << " " << k.background.g << " " << k.background.b << " " << k.groundColor.r << " " << k.groundColor.g << " "
         << k.groundColor.b << " " << k.exposure << " " << k.ao << " " << k.bloom << " " << k.saturation << " " << k.vignette << " " << k.sharpen << " "
         << k.shadowSoft << "\n";
+    // Scripts: their length, then the code as it is (any characters, any lines).
+    for (const SceneScript& s : scene.scripts) out << "script " << quoted(s.name) << " " << s.code.size() << "\n" << s.code << "\n";
     for (const Reference& r : scene.references)
         out << "reference " << quoted(r.path) << " " << axisName(r.axis) << " " << r.offset.x << " " << r.offset.y << " " << r.width << " " << r.opacity
             << " " << r.visible << "\n";
@@ -240,6 +296,19 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
     for (std::string line; std::getline(in, line);) {
         std::istringstream l(line);
         if (!(l >> word)) continue;
+        if (word == "script" && !o) {
+            SceneScript sc;
+            sc.name = readQuoted(l);
+            size_t size = 0;
+            l >> size;
+            sc.code.resize(std::min<size_t>(size, size_t(64) << 20));
+            in.read(sc.code.data(), std::streamsize(sc.code.size()));
+            sc.code.resize(size_t(in.gcount()));
+            s.scripts.push_back(std::move(sc));
+            std::string rest;
+            std::getline(in, rest); // (the newline after it)
+            continue;
+        }
         if (word == "reference") {
             Reference r;
             r.id = s.nextId++;

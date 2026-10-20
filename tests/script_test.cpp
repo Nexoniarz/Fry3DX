@@ -2,6 +2,7 @@
 // errors with their line, and an endless loop is stopped.
 #include "script.h"
 
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -66,6 +67,83 @@ int main() {
     CHECK(!r.ok && r.error.find("no material called cheese") != std::string::npos, "an unknown material is an error");
     r = runScript(host, "fry.clear()");
     CHECK(r.ok && scene.objects.empty() && active == 0 && selected.empty(), "clear");
+
+    { // Your own materials: from a script, found by name (any case), and as text and back.
+        clearOwnMaterials("mats.lua");
+        r = runScript(host, "fry.material{name = 'Teal Plastic', color = '#1f9a96', rough = 0.35}\nlocal o = fry.add('cube')\no.material = 'teal plastic'", "mats.lua");
+        CHECK(r.ok && findMaterial("teal plastic") && std::abs(scene.objects.back().rough - 0.35f) < 1e-4f && scene.objects.back().color.g > 0.5f,
+              "fry.material, then o.material (%s)", r.error.c_str());
+        CHECK(findMaterial("teal plastic")->from == "mats.lua", "it says which script made it");
+        r = runScript(host, "fry.material{name = 'Gold', color = '#ffffff'}");
+        CHECK(!r.ok, "not one of Fry3DX's own names");
+        addOwnMaterial({"", "Mine \"quoted\"", {0.1f, 0.2f, 0.3f}, 0.5f, 0.25f, true, ""});
+        const std::string text = ownMaterialsText();
+        removeOwnMaterial(materialId("Mine \"quoted\""));
+        CHECK(!findMaterial(materialId("Mine \"quoted\"")), "removed");
+        parseOwnMaterials(text);
+        const MaterialPreset* m = findMaterial(materialId("Mine \"quoted\""));
+        CHECK(m && m->keepColor && std::abs(m->metal - 0.5f) < 1e-4f && text.find("Teal") == std::string::npos, "the picker's own as text and back (only those)");
+        clearOwnMaterials("mats.lua");
+        CHECK(!findMaterial("teal plastic"), "a script's materials cleared");
+    }
+    { // A plug-in: loaded once, its commands run later (with their settings), its errors taken back.
+        Plugin p("stairs_and_such.lua");
+        Scene scratch;
+        ScriptHost load{&scratch, &selected, &active, {}, {}, 2.0};
+        std::string error;
+        const bool ok = p.load(load, R"(
+            fry.plugin{name = "Boxes", about = "Rows of boxes"}
+            local made = 0
+            fry.command{name = "Row", menu = "add", settings = {{"count", 3}, {"gap", 1.5}}, run = function(s)
+                for i = 1, s.count do fry.add("cube").position = {i * s.gap, 0, 0} end
+                made = made + 1
+                print("made " .. made)
+            end}
+            fry.command{name = "Broken", run = function() fry.add("cube"); error("no") end}
+            fry.add("sphere") -- (loading touches only its own scratch scene)
+        )", &error);
+        CHECK(ok && p.name == "Boxes" && p.about == "Rows of boxes" && p.commands.size() == 2 && p.commands[0].menu == "add" && p.commands[1].menu == "script" &&
+                  p.commands[0].settings.size() == 2 && p.commands[0].settings[1].second == 1.5,
+              "a plug-in loads and registers its commands (%s)", error.c_str());
+        Scene s2;
+        out.clear();
+        ScriptHost h{&s2, &selected, &active, [&](const std::string& t) { out += t + "\n"; }, {}, 2.0};
+        r = p.run(h, 0, {4, 2});
+        r = p.run(h, 0, {1, 2});
+        CHECK(r.ok && s2.objects.size() == 5 && std::abs(s2.objects[3].position.x - 8.0f) < 1e-4f && out.find("made 2") != std::string::npos,
+              "its command runs with the settings, and keeps its state between runs (%s)", r.error.c_str());
+        r = p.run(h, 1, {});
+        CHECK(!r.ok && r.error.find("no") != std::string::npos, "an error in a command comes back");
+        r = runScript(host, "fry.command{name = 'x', run = function() end}");
+        CHECK(!r.ok && r.error.find("plug-ins") != std::string::npos, "fry.command only in plug-ins");
+        Plugin bad("bad.lua");
+        CHECK(!bad.load(load, "fry.command{name = 'x'}", &error) && bad.commands.empty(), "a command with no run: it doesn't load");
+    }
+    // The plug-ins that come with it load.
+    for (const auto& e : std::filesystem::directory_iterator(FRY_PLUGINS_DIR)) {
+        std::ifstream in(e.path());
+        const std::string code((std::istreambuf_iterator<char>(in)), {});
+        Plugin p(e.path().filename().string());
+        Scene fresh;
+        std::set<uint32_t> sel;
+        uint32_t act = 0;
+        ScriptHost h{&fresh, &sel, &act, {}, {}, 20.0};
+        std::string error;
+        const bool ok = p.load(h, code, &error);
+        bool ran = true;
+        for (size_t c = 0; c < p.commands.size(); ++c) {
+            Scene s;
+            s.objects.push_back(Object{});
+            s.objects.back().id = s.nextId++, s.objects.back().name = "Rock", s.objects.back().mesh = makeCube();
+            std::set<uint32_t> picked{s.objects.back().id};
+            uint32_t last = s.objects.back().id;
+            ScriptHost run{&s, &picked, &last, {}, {}, 20.0};
+            const ScriptResult rr = p.run(run, c, {});
+            if (!rr.ok || s.objects.size() < 2) ran = false, error = p.commands[c].name + ": " + rr.error;
+        }
+        CHECK(ok && ran, "plug-in %s (%zu commands) %s", e.path().filename().string().c_str(), p.commands.size(), error.c_str());
+        clearOwnMaterials(e.path().filename().string());
+    }
 
     // The examples that come with it all run.
     for (const auto& e : std::filesystem::directory_iterator(FRY_SCRIPTS_DIR)) {

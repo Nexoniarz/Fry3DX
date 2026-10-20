@@ -413,6 +413,13 @@ int main() {
               "loads its own file back the same, pictures exactly");
         CHECK(std::filesystem::file_size(dir / "p.fry") < 256 * 256 * 4 / 8, "packed small (%zu bytes)", size_t(std::filesystem::file_size(dir / "p.fry")));
         CHECK(loadPackage((dir / "a.fry").string()).has_value(), "opens the old text .fry too");
+        Scene sc = s; // scripts kept in it, any characters and lines (an "end" or "object" line in one too)
+        sc.scripts = {{"Town", "-- a town\nobject \"x\"\nend\nlocal s = \"\\n\"\n"}, {"Empty", ""}, {"Last", "print(1)"}};
+        CHECK(savePackage((dir / "s.fry").string(), sc), "saves scripts in it");
+        auto sb = loadPackage((dir / "s.fry").string());
+        CHECK(sb && sb->scripts.size() == 3 && sb->scripts[0].name == "Town" && sb->scripts[0].code == sc.scripts[0].code && sb->scripts[1].code.empty() &&
+                  sb->scripts[2].code == "print(1)" && sb->objects.size() == 1 && sb->objects[0].name == s.objects[0].name,
+              "scripts come back the same, and the model with them");
         Scene g = s;
         g.folders = {{50, "Parts", 0, true, true, false}, {51, "Screws", 50, false, true, true}};
         g.objects[0].folder = 51;

@@ -36,6 +36,7 @@ if(WIN32) # a window program (no console window), with its icon
   target_link_options(fry3dx PRIVATE /ENTRY:mainCRTStartup)
 endif()
 target_link_libraries(fry3dx PRIVATE fry_core fry_script keel stb)
+target_compile_definitions(fry3dx PRIVATE FRY_VERSION="${PROJECT_VERSION}")
 add_dependencies(fry3dx content)
 foreach(t fry_core fry_script fry3dx)
   if(MSVC)

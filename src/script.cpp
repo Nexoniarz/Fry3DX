@@ -26,6 +26,8 @@ struct Context {
     ScriptHost* host;
     std::chrono::steady_clock::time_point start;
     int made = 0;
+    std::string name;               // the script's or plug-in's (materials it makes say so)
+    Plugin* plugin = nullptr;       // when it's a plug-in's (fry.command, fry.plugin)
 };
 
 Context& context(lua_State* L) {
@@ -672,8 +674,76 @@ int fryShapes(lua_State* L) {
 int fryMaterials(lua_State* L) { // fry.materials(): every material's name, for o.material = ...
     lua_newtable(L);
     int i = 0;
-    for (const MaterialPreset& m : materialPresets()) lua_pushstring(L, m.id), lua_rawseti(L, -2, ++i);
+    for (const MaterialPreset& m : ownMaterials()) lua_pushstring(L, m.id.c_str()), lua_rawseti(L, -2, ++i);
+    for (const MaterialPreset& m : materialPresets()) lua_pushstring(L, m.id.c_str()), lua_rawseti(L, -2, ++i);
     return 1;
+}
+// Reads t[key] (a table at index t) as a number, or `otherwise`.
+double fieldNumber(lua_State* L, int t, const char* key, double otherwise) {
+    lua_getfield(L, t, key);
+    const double v = lua_isnil(L, -1) ? otherwise : luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+    return v;
+}
+std::string fieldString(lua_State* L, int t, const char* key, const char* otherwise = "") {
+    lua_getfield(L, t, key);
+    std::string v = lua_isnil(L, -1) ? otherwise : luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+    return v;
+}
+int fryMaterial(lua_State* L) { // fry.material{name = "Teal plastic", color = "#20a0a0", metal = 0, rough = 0.4, keep_color = false}
+    luaL_checktype(L, 1, LUA_TTABLE);
+    MaterialPreset m;
+    m.name = fieldString(L, 1, "name");
+    if (m.name.empty()) luaL_error(L, "a material needs a name: fry.material{name = \"...\", color = ...}");
+    m.id = materialId(m.name);
+    if (lua_getfield(L, 1, "color") != LUA_TNIL) m.color = toColor(L, lua_gettop(L));
+    else m.color = glm::vec3(0.8f);
+    lua_pop(L, 1);
+    m.metal = float(fieldNumber(L, 1, "metal", 0.0)), m.rough = float(fieldNumber(L, 1, "rough", 0.5));
+    lua_getfield(L, 1, "keep_color");
+    m.keepColor = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    m.from = context(L).name;
+    for (const MaterialPreset& b : materialPresets())
+        if (b.id == m.id) luaL_error(L, "\"%s\" is one of Fry3DX's own materials: give yours another name", m.name.c_str());
+    addOwnMaterial(m);
+    lua_pushstring(L, m.id.c_str());
+    return 1;
+}
+int fryPlugin(lua_State* L) { // fry.plugin{name = "Stairs and such", about = "..."}
+    Plugin* p = context(L).plugin;
+    if (!p) return 0; // (a plain script: nothing to name)
+    luaL_checktype(L, 1, LUA_TTABLE);
+    if (std::string n = fieldString(L, 1, "name"); !n.empty()) p->name = n;
+    p->about = fieldString(L, 1, "about");
+    return 0;
+}
+// fry.command{name = "Stairs", menu = "add", help = "...", settings = {{"steps", 12}, ...}, run = function(s) ... end}
+int fryCommand(lua_State* L) {
+    Plugin* p = context(L).plugin;
+    if (!p) luaL_error(L, "fry.command is for plug-ins: put this script in the plug-ins folder (Script > Plug-ins)");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    PluginCommand c;
+    c.name = fieldString(L, 1, "name");
+    if (c.name.empty()) luaL_error(L, "a command needs a name");
+    c.help = fieldString(L, 1, "help");
+    c.menu = lower(fieldString(L, 1, "menu", "script"));
+    if (c.menu != "add" && c.menu != "object" && c.menu != "script") luaL_error(L, "menu is \"add\", \"object\" or \"script\"");
+    if (lua_getfield(L, 1, "settings") == LUA_TTABLE) {
+        const int t = lua_gettop(L);
+        for (lua_Integer i = 1; lua_rawgeti(L, t, i) == LUA_TTABLE; ++i) {
+            lua_rawgeti(L, -1, 1), lua_rawgeti(L, -2, 2);
+            c.settings.push_back({luaL_checkstring(L, -2), luaL_optnumber(L, -1, 0)});
+            lua_pop(L, 3);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (lua_getfield(L, 1, "run") != LUA_TFUNCTION) luaL_error(L, "a command needs run = function(settings) ... end");
+    c.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    p->commands.push_back(std::move(c));
+    return 0;
 }
 int fryLook(lua_State* L) { // fry.look{sun_turn = 40, sky = false, ...}; returns the look as it is
     Look& k = scene(L).look;
@@ -732,7 +802,8 @@ int fryHelp(lua_State* L) {
 const luaL_Reg kFry[] = {
     {"add", fryAdd},       {"mesh", fryMesh},         {"lathe", fryLathe}, {"extrude", fryExtrude}, {"objects", fryObjects}, {"find", fryFind},
     {"selected", frySelected}, {"select", frySelect}, {"clear", fryClear},  {"group", fryGroup},     {"shapes", fryShapes},   {"look", fryLook}, {"materials", fryMaterials},
-    {"vec", fryVec},       {"say", fryPrint},         {"frame", fryFrame}, {"help", fryHelp},       {nullptr, nullptr},
+    {"vec", fryVec},       {"say", fryPrint},         {"frame", fryFrame}, {"help", fryHelp},       {"material", fryMaterial}, {"plugin", fryPlugin},
+    {"command", fryCommand}, {nullptr, nullptr},
 };
 
 // Stops a script that's run too long (an endless loop).
@@ -762,14 +833,11 @@ int traceback(lua_State* L) {
     return 1;
 }
 
-} // namespace
-
-ScriptResult runScript(ScriptHost& host, const std::string& code, const std::string& name) {
-    size_t used = 0;
-    lua_State* L = lua_newstate(allocate, &used);
-    if (!L) return {false, "out of memory"};
-    Context ctx{&host, std::chrono::steady_clock::now()};
-    lua_pushlightuserdata(L, &ctx);
+// A Lua with Lua's safe libraries and the fry library, `ctx` as its context.
+lua_State* newState(size_t* used, Context* ctx) {
+    lua_State* L = lua_newstate(allocate, used);
+    if (!L) return nullptr;
+    lua_pushlightuserdata(L, ctx);
     lua_setfield(L, LUA_REGISTRYINDEX, "fry.context");
     const luaL_Reg libs[] = {{LUA_GNAME, luaopen_base},          {LUA_TABLIBNAME, luaopen_table}, {LUA_STRLIBNAME, luaopen_string},
                              {LUA_MATHLIBNAME, luaopen_math},    {LUA_UTF8LIBNAME, luaopen_utf8}, {LUA_COLIBNAME, luaopen_coroutine}};
@@ -790,25 +858,91 @@ ScriptResult runScript(ScriptHost& host, const std::string& code, const std::str
     luaL_newlib(L, kFry);
     lua_setglobal(L, "fry");
     lua_sethook(L, watchdog, LUA_MASKCOUNT, 100000);
+    return L;
+}
 
-    ScriptResult result;
+// Calls the function on top (under its `args`) with a traceback; the error, or empty.
+std::string call(lua_State* L, int args) {
+    const int fn = lua_gettop(L) - args;
     lua_pushcfunction(L, traceback);
+    lua_insert(L, fn);
+    std::string error;
     try {
-        if (luaL_loadbuffer(L, code.data(), code.size(), ("=" + name).c_str()) != LUA_OK || lua_pcall(L, 0, 0, 1) != LUA_OK) {
-            result.ok = false;
-            result.error = lua_tostring(L, -1) ? lua_tostring(L, -1) : "an error";
-        }
+        if (lua_pcall(L, args, 0, fn) != LUA_OK) error = lua_tostring(L, -1) ? lua_tostring(L, -1) : "an error", lua_pop(L, 1);
     } catch (const std::exception& e) { // (out of memory inside the modelling code)
-        result.ok = false;
-        result.error = e.what();
+        error = e.what();
     }
+    lua_settop(L, fn - 1);
+    return error;
+}
+
+// Nothing selected that's gone.
+void tidySelection(ScriptHost& host) {
+    if (host.selected) std::erase_if(*host.selected, [&](uint32_t id) { return !findObject(*host.scene, id); });
+    if (host.active && !findObject(*host.scene, *host.active)) *host.active = host.selected && !host.selected->empty() ? *host.selected->rbegin() : 0;
+}
+
+} // namespace
+
+ScriptResult runScript(ScriptHost& host, const std::string& code, const std::string& name) {
+    size_t used = 0;
+    Context ctx{&host, std::chrono::steady_clock::now()};
+    ctx.name = name;
+    lua_State* L = newState(&used, &ctx);
+    if (!L) return {false, "out of memory"};
+    ScriptResult result;
+    if (luaL_loadbuffer(L, code.data(), code.size(), ("=" + name).c_str()) != LUA_OK) result.error = lua_tostring(L, -1);
+    else result.error = call(L, 0);
+    result.ok = result.error.empty();
     result.objectsMade = ctx.made;
     lua_close(L);
-    // Nothing selected that's gone.
-    if (host.selected)
-        std::erase_if(*host.selected, [&](uint32_t id) { return !findObject(*host.scene, id); });
-    if (host.active && !findObject(*host.scene, *host.active)) *host.active = host.selected && !host.selected->empty() ? *host.selected->rbegin() : 0;
+    tidySelection(host);
     return result;
+}
+
+struct Plugin::State {
+    size_t used = 0;
+    Context ctx{};
+    lua_State* L = nullptr;
+};
+
+Plugin::Plugin(std::string f) : file(std::move(f)), name(file), s_(std::make_unique<State>()) {
+    if (name.ends_with(".lua")) name.resize(name.size() - 4);
+    std::replace(name.begin(), name.end(), '_', ' ');
+}
+Plugin::~Plugin() {
+    if (s_->L) lua_close(s_->L);
+}
+
+bool Plugin::load(ScriptHost& host, const std::string& code, std::string* error) {
+    s_->ctx = Context{&host, std::chrono::steady_clock::now()};
+    s_->ctx.name = file, s_->ctx.plugin = this; // (its materials say which file: clearOwnMaterials(file))
+    s_->L = newState(&s_->used, &s_->ctx);
+    std::string e = !s_->L                                                                                      ? "out of memory"
+                    : luaL_loadbuffer(s_->L, code.data(), code.size(), ("=" + file).c_str()) != LUA_OK ? lua_tostring(s_->L, -1)
+                                                                                                         : call(s_->L, 0);
+    tidySelection(host);
+    if (e.empty()) return true;
+    if (error) *error = e;
+    commands.clear();
+    return false;
+}
+
+ScriptResult Plugin::run(ScriptHost& host, size_t command, const std::vector<double>& settings) {
+    if (!s_->L || command >= commands.size()) return {false, "that command isn't there any more"};
+    const PluginCommand& c = commands[command];
+    s_->ctx.host = &host, s_->ctx.start = std::chrono::steady_clock::now(), s_->ctx.made = 0;
+    lua_State* L = s_->L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, c.ref);
+    lua_createtable(L, 0, int(c.settings.size()));
+    for (size_t i = 0; i < c.settings.size(); ++i)
+        lua_pushnumber(L, i < settings.size() ? settings[i] : c.settings[i].second), lua_setfield(L, -2, c.settings[i].first.c_str());
+    ScriptResult r;
+    r.error = call(L, 1);
+    r.ok = r.error.empty();
+    r.objectsMade = s_->ctx.made;
+    tidySelection(host);
+    return r;
 }
 
 const char* scriptHelp() {
@@ -816,7 +950,8 @@ const char* scriptHelp() {
 
 fry.add(shape, {setting = value, property = value, ...})   a library shape: fry.add("cube", {width = 2, color = "#ff8000"})
 fry.shapes()                     every shape: {id, name, settings}
-fry.materials()                  every material's name, for o.material
+fry.materials()                  every material's name, for o.material (yours first)
+fry.material{name, color, metal, rough, keep_color}   your own material, for o.material and the picker
 fry.mesh(points, faces, name)    your own: points {{x,y,z}, ...}, faces {{1,2,3,4}, ...} (counter-clockwise from outside)
 fry.lathe(profile, sides, name)  a profile of {out, up} points turned round the Z axis (bottles, vases, bowls)
 fry.extrude(outline, height, name)  an outline of {x, y} points on the ground, made that tall
@@ -839,6 +974,12 @@ An object (o):
   o:sculpt(brush, at, radius, strength, times)   brush: raise, dig, puff, shrink, smooth,
       flatten, pinch, spread; at: a point on it (the scene's space). Made finer first if needed
   o:points()  o:faces()  o:setpoints(points)  o:setshape(points, faces)  o:set(name, value)  o:settings()
+
+Plug-ins: scripts in the plug-ins folder (Script > Plug-ins), run when Fry3DX starts and kept.
+fry.plugin{name, about}          what it's called in the Plug-ins window
+fry.command{name, menu, help, settings, run}   a command in a menu: menu "add", "object" or "script";
+      settings {{"steps", 12}, {"rise", 0.18}} are asked for first, then run(s) gets s.steps, s.rise.
+      run makes and changes things like a script does: one undo step, and an error takes it back
 )";
 }
 

@@ -15,6 +15,7 @@
 #include <SDL3/SDL_main.h> // (main becomes the SDL_main SDL's Java side calls)
 #endif
 #include <core/cvar.h>
+#include <core/sysinfo.h>
 #include <core/log.h>
 #include <engine.h>
 #include <fs/vfs.h>
@@ -273,6 +274,7 @@ keel::Cvar fry_touch("fry_touch", "0", keel::CVAR_ARCHIVE, "Fry3DX: the phone la
 keel::Cvar fry_uiscale("fry_uiscale", "0", 0, "Fry3DX: draw the UI this many times bigger (0: by the screen)");
 keel::Cvar fry_uisize("fry_uisize", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout's size, times");
 keel::Cvar fry_theme("fry_theme", "0", keel::CVAR_ARCHIVE, "Fry3DX: how it looks: 0 like the desktop, 1 dark, 2 light");
+keel::Cvar fry_pluginsoff("fry_pluginsoff", "", keel::CVAR_ARCHIVE, "Fry3DX: plug-ins turned off (their file names, with | between)");
 keel::Cvar fry_autosave("fry_autosave", "2", keel::CVAR_ARCHIVE, "Fry3DX: autosave every this many minutes while there are changes (0: off)");
 
 class App : public keel::Game {
@@ -283,6 +285,11 @@ public:
     bool wantsCursor() const override { return true; }
     bool dockingUi() const override { return true; }
 
+    // "Spiral_stairs" is "Spiral stairs" (typed in the console).
+    static bool sameCommand(const std::string& name, std::string typed) {
+        std::replace(typed.begin(), typed.end(), '_', ' ');
+        return materialId(name) == materialId(typed);
+    }
     void init() override {
         static App* self = this;
         // Console commands: for scripts and tests (the ` key opens the console).
@@ -293,8 +300,8 @@ public:
             if (a.size() < 2) return;
             std::ifstream in(a[1], std::ios::binary);
             if (!in) return keel::log::warn("Couldn't open {}", a[1]);
-            self->scriptCode_.assign(std::istreambuf_iterator<char>(in), {});
-            self->scriptPath_ = a[1], self->showScript_ = true;
+            self->addScript(scriptName(a[1]), std::string(std::istreambuf_iterator<char>(in), {}));
+            self->scriptPath_ = a[1];
             self->runScriptNow();
         }, "Fry3DX: run a Lua script file (fry_run path/to/script.lua)");
         static keel::Cmd add("fry_add", [](const keel::Args& a) { if (a.size() > 1) self->addShape(a[1]); }, "Fry3DX: add a shape (cube, rounded_cube, table...)");
@@ -543,11 +550,29 @@ public:
         static keel::Cmd recover("fry_recover", [](const keel::Args&) { self->findAutosaves(), self->showRecover_ = !self->recover_.empty(); }, "Fry3DX: show the autosaves to recover");
         static keel::Cmd scriptPanel("fry_scriptpanel", [](const keel::Args& a) { self->showScript_ = a.size() < 2 || a[1] != "0"; }, "Fry3DX: show (1) or hide (0) the Script panel");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
+        static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
+            if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
+            else self->showPlugins_ = true;
+        }, "Fry3DX: the Plug-ins window (fry_plugins reload: load them again)");
+        static keel::Cmd plugin("fry_plugin", [](const keel::Args& a) { // fry_plugin "Command name" [settings...]
+            if (a.size() < 2) return;
+            for (size_t i = 0; i < self->plugins_.size(); ++i)
+                if (self->plugins_[i].p)
+                    for (size_t c = 0; c < self->plugins_[i].p->commands.size(); ++c)
+                        if (sameCommand(self->plugins_[i].p->commands[c].name, a[1])) {
+                            std::vector<double> v;
+                            for (size_t k = 2; k < a.size(); ++k) v.push_back(std::stod(a[k]));
+                            return self->runPluginCommand(i, c, v);
+                        }
+            keel::log::warn("No plug-in command called {}", a[1]);
+        }, "Fry3DX: run a plug-in's command: fry_plugin Spiral_stairs 12 0.18 (_ for spaces, any case)");
         keel::execute("r_autoexposure 0; r_ssr 0; r_volumetric 0; r_shafts 0; r_dynres 0; r_renderscale 1; fps_max 144");
 #if defined(__ANDROID__) // a phone: none of the heavy parts (and its GPU's driver is kept to well-trodden ground)
         keel::execute("r_gpuculling 0; r_occlusion 0; r_volumetricfog 0; r_mirrors 0; r_taa 0; r_shadowres 2048; r_lightshadows 0; fps_max 60");
 #endif
         newScene();
+        loadOwnMaterials();
+        loadPlugins();
         if (!startPath_.empty()) openFile(startPath_);
         findAutosaves();
     }
@@ -600,6 +625,8 @@ public:
         if (showScript_) scriptPanel();
         if (showHelp_) helpWindow();
         if (showAbout_) aboutWindow();
+        if (showPlugins_) pluginsWindow();
+        commandForm();
         copiesWindow();
         thickenWindow();
         saveQuestion();
@@ -840,7 +867,25 @@ private:
     int appliedTheme_ = -1;
     // The Script panel: the script being written, where it's from, what it printed.
     bool showScript_ = false, showScriptHelp_ = false;
-    std::string scriptCode_ = kFirstScript, scriptPath_;
+    size_t script_ = 0; // the file's script shown in the Script panel
+    std::string scriptPath_; // where it was last saved or opened from (Save as starts there)
+    // Plug-ins (Script > Plug-ins): each file, whether it's on, and how loading it went.
+    struct PluginEntry {
+        std::string path, file, error;
+        bool bundled = false, on = true;
+        std::unique_ptr<fry::Plugin> p;
+    };
+    std::vector<PluginEntry> plugins_;
+    bool showPlugins_ = false;
+    // A plug-in's command waiting for its settings (the form), and a material being named.
+    struct PendingCommand {
+        size_t plugin = 0, command = 0;
+        std::vector<double> values;
+    };
+    std::optional<PendingCommand> pendingCommand_;
+    bool nameMaterial_ = false;
+    std::string materialName_;
+    bool materialKeepColor_ = false;
     std::vector<std::pair<std::string, bool>> scriptLog_; // (line, an error)
     bool scriptLogToBottom_ = false;
     bool styled_ = false, layoutDone_ = false, showHelp_ = false, showAbout_ = false;
@@ -884,7 +929,10 @@ private:
         dirty_ = true, ++edits_;
     }
     void restore(Snapshot& s) {
+        // (Not the scripts: they're edited like text, not undone with the model.)
+        std::vector<fry::SceneScript> scripts = std::move(scene_.scripts);
         scene_ = s.scene, selected_ = s.selected, active_ = s.active, mode_ = s.mode;
+        scene_.scripts = std::move(scripts);
         selVerts_ = s.verts, selFaces_ = s.faces, selEdges_ = s.edges;
         if (mode_ == Mode::Edit && !find(active_)) mode_ = Mode::Object;
         touchAll();
@@ -905,6 +953,7 @@ private:
 
     void newScene() {
         scene_ = {};
+        script_ = 0, scriptPath_.clear();
         path_.clear();
         undo_.clear(), redo_.clear(), selected_.clear();
         mode_ = Mode::Object, active_ = 0;
@@ -1357,7 +1406,7 @@ private:
         else if (kind == 10 || kind == 11) {
             static const SDL_DialogFileFilter lua[] = {{"Lua scripts", "lua"}};
             if (kind == 10) SDL_ShowOpenFileDialog(done, this, w, lua, 1, at, false);
-            else SDL_ShowSaveFileDialog(done, this, w, lua, 1, scriptPath_.empty() || isUri(scriptPath_) ? at : scriptPath_.c_str());
+            else SDL_ShowSaveFileDialog(done, this, w, lua, 1, scriptPath_.empty() || isUri(scriptPath_) ? at : scriptPath_.c_str()); // (at: the last folder)
         }
         else SDL_ShowOpenFileDialog(done, this, w, pics, 1, at, false);
     }
@@ -4713,7 +4762,17 @@ private:
         }
     }
     void logoImage(float size) {
-        if (haveLogo_) ImGui::Image(ImTextureID(r_->uiTexture(logo_)), ImVec2(size, size));
+        if (!haveLogo_) return;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(size, size));
+        uiImage(ImGui::GetWindowDrawList(), logo_, at, ImVec2(at.x + size, at.y + size));
+    }
+    // A picture of ours in the UI, read the way ImGui's colours are (not turned linear: too dark).
+    void uiImage(ImDrawList* dl, keel::TextureId t, ImVec2 a, ImVec2 b) {
+        const keel::UiRawRead raw = r_->uiRawRead(t);
+        if (raw.begin) dl->AddCallback(raw.begin, raw.data);
+        dl->AddImage(ImTextureID(r_->uiTexture(t)), a, b);
+        if (raw.end) dl->AddCallback(raw.end, raw.data);
     }
 
     float gridStep() const { return std::pow(10.0f, std::floor(std::log10(std::max(viewHeight() / 4.0f, 1e-4f)))); }
@@ -5196,6 +5255,7 @@ private:
         }
         if (ImGui::BeginMenu("Add")) {
             addMenuItems();
+            pluginMenuItems("add");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Object")) {
@@ -5213,6 +5273,7 @@ private:
             ImGui::Separator();
             if (ImGui::MenuItem("Make it thick (or hollow)...", nullptr, false, any)) showThicken_ = true;
             if (ImGui::MenuItem("Join flat faces side by side", nullptr, false, any)) cleanFlatFaces();
+            pluginMenuItems("object");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Shape")) {
@@ -5262,12 +5323,30 @@ private:
         }
         if (ImGui::BeginMenu("Script")) {
             ImGui::MenuItem("The Script panel", nullptr, &showScript_);
-            if (ImGui::MenuItem("Run it", "F5")) runScriptNow();
+            if (ImGui::MenuItem("Run it", "F5", false, currentScript())) runScriptNow();
+            if (!scene_.scripts.empty() && ImGui::BeginMenu("This file's scripts")) {
+                for (size_t i = 0; i < scene_.scripts.size(); ++i)
+                    if (ImGui::MenuItem(scene_.scripts[i].name.c_str(), nullptr, i == script_)) script_ = i, showScript_ = true;
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
+            if (ImGui::MenuItem("New script")) addScript("Script", kFirstScript);
             if (ImGui::MenuItem("Open a script...")) showScript_ = true, dialog(10);
-            if (ImGui::MenuItem("Save the script as...")) dialog(11);
+            if (ImGui::MenuItem("Save the script as...", nullptr, false, currentScript())) dialog(11);
             exampleScripts();
             ImGui::Separator();
+            if (ImGui::BeginMenu("Plug-ins")) {
+                bool any = false;
+                for (size_t i = 0; i < plugins_.size(); ++i)
+                    if (plugins_[i].p)
+                        for (size_t c = 0; c < plugins_[i].p->commands.size(); ++c)
+                            if (plugins_[i].p->commands[c].menu == "script") pluginMenuItem(i, c), any = true;
+                if (any) ImGui::Separator();
+                if (ImGui::MenuItem("Plug-ins...")) showPlugins_ = true;
+                if (ImGui::MenuItem("Open the plug-ins folder")) openPluginsFolder();
+                if (ImGui::MenuItem("Load them again")) loadPlugins();
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("What scripts can do")) showScript_ = showScriptHelp_ = true;
             ImGui::EndMenu();
         }
@@ -5992,7 +6071,7 @@ private:
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->PushClipRect(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), true);
         dl->AddRectFilled(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), IM_COL32(24, 24, 28, 255));
-        dl->AddImage(ImTextureID(r_->uiTexture(paintTex_[o->id])), toScreen({0, 0}), toScreen({float(W), float(H)}));
+        uiImage(dl, paintTex_[o->id], toScreen({0, 0}), toScreen({float(W), float(H)}));
         dl->AddRect(toScreen({0, 0}), toScreen({float(W), float(H)}), IM_COL32(0, 0, 0, 255));
         if (tab_ == Tab::Layout) {
             if (o->uvsFit()) layoutCanvas(*o, dl, toScreen, mouse, hovered, W, H);
@@ -6212,28 +6291,79 @@ private:
     }
 
     // A material to start from: sets colour, metal and rough in one go (each a little ball of it).
+    // Yours (saved here, or from plug-ins and scripts) first; "Save its look as a material" adds one.
     void materialPicker(Object& o) {
+        auto matches = [&](const MaterialPreset& m) {
+            return std::abs(m.metal - o.metal) < 0.01f && std::abs(m.rough - o.rough) < 0.01f &&
+                   (m.keepColor || glm::all(glm::lessThan(glm::abs(m.color - o.color), glm::vec3(0.01f))));
+        };
         const MaterialPreset* now = nullptr;
         for (const MaterialPreset& m : materialPresets())
-            if (std::abs(m.metal - o.metal) < 0.01f && std::abs(m.rough - o.rough) < 0.01f && (m.keepColor || glm::all(glm::lessThan(glm::abs(m.color - o.color), glm::vec3(0.01f))))) now = &m;
+            if (matches(m)) now = &m;
+        for (const MaterialPreset& m : ownMaterials())
+            if (matches(m)) now = &m;
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-        if (!ImGui::BeginCombo("Material", now ? now->name : "(its own)", ImGuiComboFlags_HeightLarge)) return;
-        for (const MaterialPreset& m : materialPresets()) {
-            const ImVec2 p = ImGui::GetCursorScreenPos();
-            const float h = ImGui::GetTextLineHeight();
-            ImGui::PushID(m.id);
-            if (ImGui::Selectable("##m", now == &m, 0, ImVec2(0, h))) pushUndo(), applyMaterial(o, m), touched(o.id);
-            ImGui::PopID();
-            // A ball: its colour, darker round the edge, a highlight as sharp as it's smooth.
-            const glm::vec3 c = m.keepColor ? o.color : m.color;
-            const ImVec2 mid(p.x + h * 0.5f, p.y + h * 0.5f);
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddCircleFilled(mid, h * 0.45f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r * 0.55f, c.g * 0.55f, c.b * 0.55f, 1)));
-            dl->AddCircleFilled(ImVec2(mid.x - h * 0.05f, mid.y - h * 0.05f), h * 0.36f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, 1)));
-            dl->AddCircleFilled(ImVec2(mid.x - h * 0.14f, mid.y - h * 0.14f), h * (0.06f + 0.1f * m.rough), IM_COL32(255, 255, 255, int(230 * (1.0f - m.rough * 0.8f))));
-            dl->AddText(ImVec2(p.x + h * 1.4f, p.y), ImGui::GetColorU32(ImGuiCol_Text), m.name);
+        if (ImGui::BeginCombo("Material", now ? now->name.c_str() : "(its own)", ImGuiComboFlags_HeightLarge)) {
+            std::optional<std::string> remove;
+            auto item = [&](const MaterialPreset& m, bool own) {
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                const float h = ImGui::GetTextLineHeight();
+                ImGui::PushID(m.id.c_str());
+                ImGui::PushID(own);
+                if (ImGui::Selectable("##m", now == &m, 0, ImVec2(0, h))) pushUndo(), applyMaterial(o, m), touched(o.id);
+                if (own && m.from.empty() && ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Remove it")) remove = m.id;
+                    ImGui::EndPopup();
+                }
+                if (own && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", m.from.empty() ? "Yours (right-click to remove)" : ("From " + m.from).c_str());
+                ImGui::PopID();
+                ImGui::PopID();
+                // A ball: its colour, darker round the edge, a highlight as sharp as it's smooth.
+                const glm::vec3 c = m.keepColor ? o.color : m.color;
+                const ImVec2 mid(p.x + h * 0.5f, p.y + h * 0.5f);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddCircleFilled(mid, h * 0.45f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r * 0.55f, c.g * 0.55f, c.b * 0.55f, 1)));
+                dl->AddCircleFilled(ImVec2(mid.x - h * 0.05f, mid.y - h * 0.05f), h * 0.36f, ImGui::ColorConvertFloat4ToU32(ImVec4(c.r, c.g, c.b, 1)));
+                dl->AddCircleFilled(ImVec2(mid.x - h * 0.14f, mid.y - h * 0.14f), h * (0.06f + 0.1f * m.rough), IM_COL32(255, 255, 255, int(230 * (1.0f - m.rough * 0.8f))));
+                dl->AddText(ImVec2(p.x + h * 1.4f, p.y), ImGui::GetColorU32(ImGuiCol_Text), m.name.c_str());
+            };
+            if (!ownMaterials().empty()) {
+                ImGui::SeparatorText("Yours");
+                for (const MaterialPreset& m : ownMaterials()) item(m, true);
+                ImGui::SeparatorText("Fry3DX's");
+            }
+            for (const MaterialPreset& m : materialPresets()) item(m, false);
+            ImGui::Separator();
+            if (ImGui::Selectable("Save its look as a material...")) nameMaterial_ = true, materialName_.clear(), materialKeepColor_ = false;
+            ImGui::EndCombo();
+            if (remove && removeOwnMaterial(*remove)) saveOwnMaterials();
         }
-        ImGui::EndCombo();
+        if (std::exchange(nameMaterial_, false)) ImGui::OpenPopup("Save as a material");
+        ImGui::SetNextWindowSize(ImVec2(340, 0));
+        if (ImGui::BeginPopupModal("Save as a material", nullptr, ImGuiWindowFlags_NoResize)) {
+            ImGui::TextWrapped("Its colour, metal and rough as one of your materials, in the picker for every file.");
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            inputString("##name", materialName_, "Its name (\"Teal plastic\")");
+            ImGui::Checkbox("Only how metal and rough (keep each object's colour)", &materialKeepColor_);
+            const bool taken = std::any_of(materialPresets().begin(), materialPresets().end(), [&](const MaterialPreset& m) { return m.id == materialId(materialName_); });
+            if (taken) ImGui::TextColored(roleColor(keel::ui::Role::DangerText), "That's one of Fry3DX's own: another name");
+            ImGui::BeginDisabled(materialId(materialName_).empty() || taken);
+            pushAccent();
+            const bool save = ImGui::Button("Save", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+            popAccent();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (save && !materialId(materialName_).empty() && !taken) {
+                addOwnMaterial({materialId(materialName_), materialName_, o.color, o.metal, o.rough, materialKeepColor_, ""});
+                saveOwnMaterials();
+                say("Saved \"" + materialName_ + "\": it's in the Material picker now");
+                ImGui::CloseCurrentPopup();
+            }
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
 
     void editProperties(Object& o, float w) {
@@ -6375,15 +6505,39 @@ private:
         if (scriptLog_.size() > 2000) scriptLog_.erase(scriptLog_.begin(), scriptLog_.begin() + 500);
         scriptLogToBottom_ = true;
     }
+    fry::SceneScript* currentScript() { return script_ < scene_.scripts.size() ? &scene_.scripts[script_] : nullptr; }
+    // "little_town.lua" -> "little town" (a script's name in the list).
+    static std::string scriptName(const std::string& path) {
+        std::string n = stdfs::path(fileName(path)).stem().string();
+        std::replace(n.begin(), n.end(), '_', ' ');
+        return n.empty() ? "Script" : n;
+    }
+    // Adds a script to the file's list and shows it (the same one again: just shows it).
+    void addScript(std::string name, std::string code) {
+        for (size_t i = 0; i < scene_.scripts.size(); ++i)
+            if (scene_.scripts[i].name == name && scene_.scripts[i].code == code) return void((script_ = i, showScript_ = true));
+        const std::string base = name;
+        for (int n = 2; std::any_of(scene_.scripts.begin(), scene_.scripts.end(), [&](const fry::SceneScript& s) { return s.name == name; }); ++n)
+            name = std::format("{} {}", base, n);
+        scene_.scripts.push_back({name, std::move(code)});
+        script_ = scene_.scripts.size() - 1;
+        showScript_ = true, dirty_ = true;
+    }
     // Runs the Script panel's script: one undo step; if it stops with an error, everything it did
     // is taken back.
     void runScriptNow() {
+        const fry::SceneScript* sc = currentScript();
+        if (!sc) return say("No script to run: Script > New script, or open one");
         if (mode_ == Mode::Edit) leaveEdit();
-        const std::string name = scriptPath_.empty() ? "script" : fileName(scriptPath_);
+        const std::string name = sc->name, code = sc->code; // (the list itself may change while it runs)
         pushUndo();
         bool frame = false;
         fry::ScriptHost host{&scene_, &selected_, &active_, [this](const std::string& t) { scriptLine(t); }, [&] { frame = true; }};
-        const fry::ScriptResult r = fry::runScript(host, scriptCode_, name);
+        const fry::ScriptResult r = fry::runScript(host, code, name);
+        finishRun(r, name, frame);
+    }
+    // After a script or plug-in command: kept as one undo step, or all taken back on an error.
+    void finishRun(const fry::ScriptResult& r, const std::string& name, bool frame) {
         touchAll();
         if (r.ok && frame) frameAll();
         if (!r.ok) {
@@ -6391,7 +6545,7 @@ private:
             redo_.clear();
             scriptLine(r.error, true);
             showScript_ = true;
-            return say("The script stopped (nothing it did was kept): " + r.error.substr(0, r.error.find('\n')));
+            return say(name + " stopped (nothing it did was kept): " + r.error.substr(0, r.error.find('\n')));
         }
         dirty_ = true;
         say(r.objectsMade ? std::format("{} ran: {} object{} made (Ctrl+Z takes it all back)", name, r.objectsMade, r.objectsMade == 1 ? "" : "s")
@@ -6400,34 +6554,223 @@ private:
     void openScript(const std::string& path, const std::string& shownName) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return say("Couldn't open " + shownName);
-        scriptCode_.assign(std::istreambuf_iterator<char>(in), {});
-        scriptPath_ = shownName;
-        showScript_ = true;
-        say("Opened " + shownName + ": F5 runs it");
+        addScript(scriptName(shownName), std::string(std::istreambuf_iterator<char>(in), {}));
+        scriptPath_ = isUri(path) ? std::string() : path;
+        say("Opened " + shownName + ": it's kept in this file now. F5 runs it");
     }
     void saveScript(std::string file) {
+        const fry::SceneScript* sc = currentScript();
+        if (!sc) return;
         if (isUri(file)) {
             const std::string temp = tempFile("script.lua");
             std::string error;
-            const bool ok = writeFileSafely(temp, scriptCode_.data(), scriptCode_.size(), &error) && toUri(temp, file);
+            const bool ok = writeFileSafely(temp, sc->code.data(), sc->code.size(), &error) && toUri(temp, file);
             return say(ok ? "Saved " + fileName(file) : "Couldn't write the file you picked");
         }
         if (stdfs::path(file).extension() != ".lua") file += ".lua";
         std::string error;
-        if (!writeFileSafely(file, scriptCode_.data(), scriptCode_.size(), &error)) return say("Couldn't save the script: " + error);
+        if (!writeFileSafely(file, sc->code.data(), sc->code.size(), &error)) return say("Couldn't save the script: " + error);
         scriptPath_ = file;
         say("Saved " + fileName(file));
     }
-    // The scripts that come with it (content/Fry3DX/scripts), as menu items that load one.
+    // The scripts that come with it (content/Fry3DX/scripts), as menu items that add one.
     void exampleScripts() {
         if (!ImGui::BeginMenu("Examples")) return;
-        for (const std::string& f : keel::fs::list("scripts", ".lua")) {
-            std::string name = stdfs::path(f).stem().string();
-            std::replace(name.begin(), name.end(), '_', ' ');
-            if (ImGui::MenuItem(name.c_str()))
-                if (auto text = keel::fs::readText(f)) scriptCode_ = *text, scriptPath_ = stdfs::path(f).filename().string(), showScript_ = true;
-        }
+        exampleItems(false);
         ImGui::EndMenu();
+    }
+    void exampleItems(bool selectable) {
+        for (const std::string& f : keel::fs::list("scripts", ".lua")) {
+            const std::string name = scriptName(f);
+            if (selectable ? ImGui::Selectable(name.c_str()) : ImGui::MenuItem(name.c_str()))
+                if (auto text = keel::fs::readText(f)) addScript(name, *text);
+        }
+    }
+
+    // ── Own materials (materials.txt in the settings folder) ──
+    static std::string ownMaterialsPath() { return keel::prefPath() + "materials.txt"; }
+    void loadOwnMaterials() {
+        std::ifstream in(ownMaterialsPath(), std::ios::binary);
+        if (in) parseOwnMaterials(std::string(std::istreambuf_iterator<char>(in), {}));
+    }
+    void saveOwnMaterials() {
+        const std::string text = ownMaterialsText();
+        std::string error;
+        if (!writeFileSafely(ownMaterialsPath(), text.data(), text.size(), &error)) say("Couldn't keep your materials: " + error);
+    }
+
+    // ── Plug-ins: content/Fry3DX/plugins (they come with it) and the settings folder's plugins ──
+    static std::string pluginsFolder() { return keel::prefPath() + "plugins/"; }
+    std::set<std::string> pluginsOff() const {
+        std::set<std::string> off;
+        std::istringstream in(fry_pluginsoff.str());
+        for (std::string f; std::getline(in, f, '|');)
+            if (!f.empty()) off.insert(f);
+        return off;
+    }
+    void setPluginOn(const std::string& file, bool on) {
+        std::set<std::string> off = pluginsOff();
+        if (on) off.erase(file);
+        else off.insert(file);
+        std::string text;
+        for (const std::string& f : off) text += (text.empty() ? "" : "|") + f;
+        fry_pluginsoff.set(text);
+        loadPlugins();
+    }
+    void loadPlugins() {
+        for (const PluginEntry& e : plugins_) fry::clearOwnMaterials(e.file);
+        plugins_.clear();
+        std::error_code ec;
+        stdfs::create_directories(pluginsFolder(), ec);
+        std::vector<std::pair<PluginEntry, std::string>> found; // (and its code)
+        for (const std::string& f : keel::fs::list("plugins", ".lua"))
+            if (auto text = keel::fs::readText(f)) found.push_back({PluginEntry{f, fileName(f), "", true}, *text});
+        std::vector<stdfs::path> mine;
+        for (const auto& d : stdfs::directory_iterator(pluginsFolder(), ec))
+            if (d.path().extension() == ".lua") mine.push_back(d.path());
+        std::sort(mine.begin(), mine.end());
+        for (const stdfs::path& f : mine) {
+            std::ifstream in(f, std::ios::binary);
+            found.push_back({PluginEntry{f.string(), f.filename().string()}, std::string(std::istreambuf_iterator<char>(in), {})});
+        }
+        const std::set<std::string> off = pluginsOff();
+        fry::Scene scratch; // (loading a plug-in can't touch the open file: only its commands, when run, do)
+        std::set<uint32_t> none;
+        uint32_t noActive = 0;
+        for (auto& [e, code] : found) {
+            e.on = !off.count(e.file);
+            if (e.on) {
+                e.p = std::make_unique<fry::Plugin>(e.file);
+                fry::ScriptHost host{&scratch, &none, &noActive, [this, f = e.file](const std::string& t) { scriptLine(f + ": " + t); }, {}};
+                if (!e.p->load(host, code, &e.error)) {
+                    fry::clearOwnMaterials(e.file);
+                    scriptLine(e.error, true);
+                    keel::log::warn("Plug-in {} didn't load: {}", e.file, e.error.substr(0, e.error.find('\n')));
+                }
+            }
+            plugins_.push_back(std::move(e));
+        }
+        size_t loaded = 0;
+        for (const PluginEntry& e : plugins_) loaded += e.p && e.error.empty();
+        if (loaded) keel::log::info("Plug-ins: {} loaded", loaded);
+    }
+    void openPluginsFolder() {
+        std::error_code ec;
+        stdfs::create_directories(pluginsFolder(), ec);
+        SDL_OpenURL(("file://" + pluginsFolder()).c_str());
+    }
+    bool pluginUsable(size_t i) const { return i < plugins_.size() && plugins_[i].p && plugins_[i].error.empty(); }
+    void pluginMenuItems(const char* menu) {
+        bool first = true;
+        for (size_t i = 0; i < plugins_.size(); ++i)
+            if (pluginUsable(i))
+                for (size_t c = 0; c < plugins_[i].p->commands.size(); ++c)
+                    if (plugins_[i].p->commands[c].menu == menu) {
+                        if (std::exchange(first, false)) ImGui::SeparatorText("Plug-ins");
+                        pluginMenuItem(i, c);
+                    }
+    }
+    void pluginMenuItem(size_t i, size_t c) {
+        const fry::PluginCommand& cmd = plugins_[i].p->commands[c];
+        if (ImGui::MenuItem((cmd.name + (cmd.settings.empty() ? "" : "...")).c_str())) {
+            if (cmd.settings.empty()) runPluginCommand(i, c, {});
+            else {
+                pendingCommand_ = PendingCommand{i, c, {}};
+                for (const auto& [n, v] : cmd.settings) pendingCommand_->values.push_back(v);
+            }
+        }
+        if (!cmd.help.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s (%s)", cmd.help.c_str(), plugins_[i].p->name.c_str());
+    }
+    void runPluginCommand(size_t i, size_t c, const std::vector<double>& values) {
+        if (!pluginUsable(i) || c >= plugins_[i].p->commands.size()) return;
+        if (mode_ == Mode::Edit) leaveEdit();
+        pushUndo();
+        bool frame = false;
+        fry::ScriptHost host{&scene_, &selected_, &active_, [this](const std::string& t) { scriptLine(t); }, [&] { frame = true; }};
+        const fry::ScriptResult r = plugins_[i].p->run(host, c, values);
+        finishRun(r, plugins_[i].p->commands[c].name, frame);
+    }
+    // A plug-in command's settings, asked for before it runs.
+    void commandForm() {
+        if (!pendingCommand_) return;
+        if (!pluginUsable(pendingCommand_->plugin)) return pendingCommand_.reset();
+        const fry::PluginCommand& cmd = plugins_[pendingCommand_->plugin].p->commands[pendingCommand_->command];
+        const std::string title = cmd.name + "###plugincommand";
+        if (!ImGui::IsPopupOpen("###plugincommand")) ImGui::OpenPopup(title.c_str());
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(340, 0));
+        if (!ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_NoResize)) return;
+        if (!cmd.help.empty()) ImGui::TextWrapped("%s", cmd.help.c_str());
+        ImGui::TextDisabled("From %s", plugins_[pendingCommand_->plugin].p->name.c_str());
+        for (size_t k = 0; k < cmd.settings.size(); ++k) {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
+            std::string label = cmd.settings[k].first;
+            if (!label.empty()) label[0] = char(std::toupper(static_cast<unsigned char>(label[0])));
+            std::replace(label.begin(), label.end(), '_', ' ');
+            ImGui::InputDouble(label.c_str(), &pendingCommand_->values[k], 0, 0, "%.4g");
+        }
+        ImGui::Spacing();
+        pushAccent();
+        const bool go = ImGui::Button("Make it", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+        popAccent();
+        ImGui::SameLine();
+        const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0));
+        if (go || cancel) {
+            ImGui::CloseCurrentPopup();
+            const PendingCommand p = *pendingCommand_;
+            pendingCommand_.reset();
+            if (go) runPluginCommand(p.plugin, p.command, p.values);
+        }
+        ImGui::EndPopup();
+    }
+    void pluginsWindow() {
+        using keel::ui::Role;
+        ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Plug-ins", &showPlugins_, ImGuiWindowFlags_NoDocking)) return ImGui::End();
+        ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::TextSecondary));
+        ImGui::TextWrapped("Plug-ins are scripts that stay loaded: they add commands to the menus and materials to the picker. "
+                           "Put a .lua file in the plug-ins folder and load them again.");
+        ImGui::PopStyleColor();
+        if (ImGui::Button("Open the plug-ins folder")) openPluginsFolder();
+        ImGui::SameLine();
+        if (ImGui::Button("Load them again")) loadPlugins();
+        ImGui::SameLine();
+        if (ImGui::Button("How to write one")) showScript_ = showScriptHelp_ = true;
+        ImGui::Spacing();
+        if (plugins_.empty()) ImGui::TextDisabled("None yet.");
+        std::optional<std::pair<std::string, bool>> toggle;
+        for (size_t i = 0; i < plugins_.size(); ++i) {
+            const PluginEntry& e = plugins_[i];
+            ImGui::PushID(int(i));
+            ImGui::BeginChild("plugin", ImVec2(0, 0), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY);
+            bool on = e.on;
+            if (ImGui::Checkbox("##on", &on)) toggle = {e.file, on};
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(on ? "On: turn it off" : "Off: turn it on");
+            ImGui::SameLine();
+            ImGui::PushFont(keel::ui::font(keel::ui::Font::Bold), 0.0f);
+            ImGui::TextUnformatted(e.p ? e.p->name.c_str() : scriptName(e.file).c_str());
+            ImGui::PopFont();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s%s", e.file.c_str(), e.bundled ? "  (comes with Fry3DX)" : "");
+            if (e.p && !e.p->about.empty()) ImGui::TextWrapped("%s", e.p->about.c_str());
+            if (!e.error.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::DangerText));
+                ImGui::TextWrapped("Didn't load: %s", e.error.c_str());
+                ImGui::PopStyleColor();
+            } else if (e.p) {
+                std::string adds;
+                for (const fry::PluginCommand& c : e.p->commands) adds += std::format("{}{} ({} menu)", adds.empty() ? "" : ", ", c.name, c.menu == "add" ? "Add" : c.menu == "object" ? "Object" : "Script > Plug-ins");
+                size_t mats = 0;
+                for (const MaterialPreset& m : ownMaterials()) mats += m.from == e.file;
+                if (mats) adds += std::format("{}{} material{}", adds.empty() ? "" : ", ", mats, mats == 1 ? "" : "s");
+                ImGui::TextColored(roleColor(Role::TextTertiary), "Adds: %s", adds.empty() ? "nothing yet" : adds.c_str());
+            } else ImGui::TextDisabled("Turned off");
+            ImGui::EndChild();
+            ImGui::PopID();
+        }
+        ImGui::End();
+        if (toggle) setPluginOn(toggle->first, toggle->second);
     }
     static int growString(ImGuiInputTextCallbackData* d) {
         if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) {
@@ -6437,34 +6780,77 @@ private:
         }
         return 0;
     }
+    // A one-line field for a std::string (it grows as it's typed into).
+    static bool inputString(const char* label, std::string& text, const char* hint = nullptr) {
+        return ImGui::InputTextWithHint(label, hint ? hint : "", text.data(), text.capacity() + 1, ImGuiInputTextFlags_CallbackResize, growString, &text);
+    }
     void scriptPanel() {
+        using keel::ui::Role;
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(std::min(620.0f, vp->WorkSize.x * 0.45f), vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(std::min(780.0f, vp->WorkSize.x * 0.55f), vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin("Script", &showScript_)) return ImGui::End();
+
+        // The file's scripts (saved in the .fry with it).
+        const float listW = std::min(180.0f, ImGui::GetContentRegionAvail().x * 0.3f);
+        ImGui::BeginChild("scripts", ImVec2(listW, 0));
+        ImGui::TextColored(roleColor(Role::TextTertiary), "In this file");
+        std::optional<size_t> remove, copy;
+        for (size_t i = 0; i < scene_.scripts.size(); ++i) {
+            ImGui::PushID(int(i));
+            if (ImGui::Selectable(scene_.scripts[i].name.c_str(), i == script_)) script_ = i;
+            if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem("Run it")) script_ = i, runScriptNow();
+                if (ImGui::MenuItem("Duplicate")) copy = i;
+                if (ImGui::MenuItem("Remove from the file")) remove = i;
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        if (scene_.scripts.empty()) ImGui::TextDisabled("None yet");
+        ImGui::Spacing();
+        if (ImGui::Button("+ New", ImVec2(-FLT_MIN, 0))) addScript("Script", kFirstScript);
+        if (ImGui::Button("Examples", ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("examples");
+        if (ImGui::BeginPopup("examples")) {
+            exampleItems(true);
+            ImGui::EndPopup();
+        }
+        if (ImGui::Button("Open...", ImVec2(-FLT_MIN, 0))) dialog(10);
+        ImGui::EndChild();
+        if (copy) addScript(scene_.scripts[*copy].name, scene_.scripts[*copy].code + "\n");
+        if (remove) {
+            scene_.scripts.erase(scene_.scripts.begin() + long(*remove));
+            if (script_ >= scene_.scripts.size()) script_ = scene_.scripts.empty() ? 0 : scene_.scripts.size() - 1;
+            dirty_ = true;
+        }
+        ImGui::SameLine();
+
+        ImGui::BeginGroup();
+        fry::SceneScript* sc = currentScript();
+        if (!sc) {
+            ImGui::Dummy(ImVec2(0, 40));
+            ImGui::TextWrapped("This file has no scripts yet. A script is Lua that builds or changes the scene; it's saved in the .fry "
+                               "with the model.");
+            pushAccent();
+            if (ImGui::Button("+ New script")) addScript("Script", kFirstScript);
+            popAccent();
+            ImGui::SameLine();
+            if (ImGui::Button("What scripts can do")) addScript("Script", kFirstScript), showScriptHelp_ = true;
+            ImGui::EndGroup();
+            return ImGui::End();
+        }
         pushAccent();
         if (ImGui::Button("Run  (F5)")) runScriptNow();
         popAccent();
         ImGui::SameLine();
-        if (ImGui::Button("Open...")) dialog(10);
+        ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 190));
+        if (inputString("##name", sc->name)) dirty_ = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Its name (click to change)");
         ImGui::SameLine();
-        if (ImGui::Button("Save as...")) dialog(11);
-        ImGui::SameLine();
-        if (ImGui::Button("Examples")) ImGui::OpenPopup("examples");
-        if (ImGui::BeginPopup("examples")) {
-            for (const std::string& f : keel::fs::list("scripts", ".lua")) {
-                std::string name = stdfs::path(f).stem().string();
-                std::replace(name.begin(), name.end(), '_', ' ');
-                if (ImGui::Selectable(name.c_str()))
-                    if (auto text = keel::fs::readText(f)) scriptCode_ = *text, scriptPath_ = stdfs::path(f).filename().string();
-            }
-            ImGui::EndPopup();
-        }
+        if (ImGui::Button("Save as .lua")) dialog(11);
         ImGui::SameLine();
         if (ImGui::Button(showScriptHelp_ ? "Hide help" : "?")) showScriptHelp_ = !showScriptHelp_;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Everything a script can use");
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", scriptPath_.empty() ? "(not saved)" : fileName(scriptPath_).c_str());
 
         const float logH = std::max(90.0f, ImGui::GetContentRegionAvail().y * 0.22f);
         ImGui::PushFont(keel::ui::font(keel::ui::Font::Mono), 0.0f);
@@ -6474,10 +6860,11 @@ private:
             ImGui::EndChild();
         }
         const ImVec2 editor(-FLT_MIN, std::max(120.0f, ImGui::GetContentRegionAvail().y - logH - ImGui::GetStyle().ItemSpacing.y));
-        ImGui::InputTextMultiline("##code", scriptCode_.data(), scriptCode_.capacity() + 1, editor,
-                                  ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, growString, &scriptCode_);
+        if (ImGui::InputTextMultiline("##code", sc->code.data(), sc->code.capacity() + 1, editor,
+                                      ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, growString, &sc->code))
+            dirty_ = true;
         const bool typing = ImGui::IsItemActive();
-        ImGui::BeginChild("log", ImVec2(0, 0), ImGuiChildFlags_FrameStyle);
+        ImGui::BeginChild("log", ImVec2(-FLT_MIN, 0), ImGuiChildFlags_FrameStyle);
         if (scriptLog_.empty()) ImGui::TextDisabled("What it prints shows here.");
         for (const auto& [line, error] : scriptLog_) {
             if (error) ImGui::PushStyleColor(ImGuiCol_Text, roleColor(keel::ui::Role::DangerText));
@@ -6487,6 +6874,7 @@ private:
         if (std::exchange(scriptLogToBottom_, false)) ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
         ImGui::PopFont();
+        ImGui::EndGroup();
         if (typing && ImGui::GetIO().KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) runScriptNow();
         if (typing && ImGui::IsKeyPressed(ImGuiKey_F5, false)) runScriptNow();
         ImGui::End();
@@ -6536,15 +6924,78 @@ private:
     }
 
     void aboutWindow() {
-        ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_Always);
+        using keel::ui::Role;
+        const float w = 460.0f;
+        ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (!ImGui::Begin("About Fry3DX", &showAbout_, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) return ImGui::End();
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 160) * 0.5f);
-        logoImage(160);
-        const char* title = "Fry3DX — Frying 3D Extreme";
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(title).x) * 0.5f);
-        ImGui::TextColored(accentText(), "%s", title);
-        ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Made by Nexoniarz; open source (Apache License 2.0).");
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28, 24));
+        const bool open = ImGui::Begin("About Fry3DX", &showAbout_, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking);
+        ImGui::PopStyleVar();
+        if (!open) return ImGui::End();
+        auto centred = [](const char* text, ImVec4 colour) {
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(text).x) * 0.5f);
+            ImGui::TextColored(colour, "%s", text);
+        };
+        // The logo, warmed from behind by the stove.
+        const float logo = 128.0f;
+        const ImVec2 at(ImGui::GetWindowPos().x + (ImGui::GetWindowWidth() - logo) * 0.5f, ImGui::GetCursorScreenPos().y + 4);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 mid(at.x + logo * 0.5f, at.y + logo * 0.62f);
+        for (int i = 16; i >= 1; --i) dl->AddCircleFilled(mid, logo * (0.3f + 0.04f * float(i)), keel::ui::accent(0.018f), 64);
+        ImGui::SetCursorScreenPos(at);
+        logoImage(logo);
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::PushFont(keel::ui::font(keel::ui::Font::Title), 30.0f);
+        centred("Fry3DX", roleColor(Role::Text));
+        ImGui::PopFont();
+        centred("Frying 3D Extreme", accentText());
+        centred("Version " FRY_VERSION, roleColor(Role::TextSecondary));
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::TextSecondary));
+        ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Model, sculpt, paint, render and get it ready "
+                           "to print, and write a script when clicking gets repetitive.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+
+        // What it's running on (for a bug report: Copy).
+        const keel::GpuInfo gpu = r_->gpuInfo();
+        const auto& machine = keel::sys::machine();
+        const std::vector<std::pair<const char*, std::string>> rows = {
+            {"Version", FRY_VERSION}, {"Drawn with", r_->apiName()}, {"Graphics", gpu.name.empty() ? "?" : gpu.name}, {"System", machine.os}, {"Processor", machine.cpu},
+            {"Plug-ins", std::format("{} loaded", std::count_if(plugins_.begin(), plugins_.end(), [](const PluginEntry& e) { return e.p && e.error.empty(); }))}};
+        ImGui::BeginChild("details", ImVec2(0, 0), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY);
+        if (ImGui::BeginTable("details", 2, ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, 90);
+            ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+            for (const auto& [k, v] : rows) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextColored(roleColor(Role::TextTertiary), "%s", k);
+                ImGui::TableNextColumn();
+                ImGui::TextWrapped("%s", v.c_str());
+            }
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
+        ImGui::Dummy(ImVec2(0, 4));
+        const float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3;
+        pushAccent();
+        if (ImGui::Button("Website", ImVec2(bw, 0))) SDL_OpenURL("https://nexoniarz.github.io/Fry3DX/");
+        popAccent();
+        ImGui::SameLine();
+        if (ImGui::Button("Source on GitHub", ImVec2(bw, 0))) SDL_OpenURL("https://github.com/Nexoniarz/Fry3DX");
+        ImGui::SameLine();
+        if (ImGui::Button("Copy details", ImVec2(bw, 0))) {
+            std::string text = "Fry3DX";
+            for (const auto& [k, v] : rows) text += std::format("\n{}: {}", k, v);
+            SDL_SetClipboardText(text.c_str());
+            say("The details are copied: paste them into a bug report");
+        }
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::TextTertiary));
+        ImGui::TextWrapped("Made by Nexoniarz, open source (Apache License 2.0). Built on SDL 3, Dear ImGui, Lua 5.4, GLM, zstd, stb, volk and VMA; "
+                           "the look is Niveus.");
+        ImGui::PopStyleColor();
         ImGui::End();
     }
 };
