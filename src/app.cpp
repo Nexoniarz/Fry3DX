@@ -3,6 +3,7 @@
 // and clear while you model (Solid), or properly lit (Rendered). The panels are Dear ImGui.
 //
 //   fry3dx [file.fry]
+#include "commands.h"
 #include "icons.h"
 #include "mesh.h"
 #include "scene.h"
@@ -584,6 +585,15 @@ public:
                 self->changedShape(*o, true);
             } else if (a[1] == "soft") self->softSel_ = a.size() < 3 || a[2] != "0", self->softReach_ = a.size() > 3 ? std::stof(a[3]) : self->softReach_;
         }, "Fry3DX: shape editing: fry_shapeop smooth | bridge | push metres | soft 1 [reach] | move x y z");
+        static keel::Cmd search("fry_search", [](const keel::Args& a) { // fry_search [words]: the command search, typed in
+            self->openSearch();
+            if (a.size() > 1) std::snprintf(self->search_.text, sizeof self->search_.text, "%s", a[1].c_str());
+        }, "Fry3DX: open the command search (F3), with words typed in");
+        static keel::Cmd runCmd("fry_command", [](const keel::Args& a) { if (a.size() > 1) self->buildCommands(), self->runCommand(a[1]); }, "Fry3DX: run a command by its id (file.save, view.top...)");
+        static keel::Cmd pie("fry_pie", [](const keel::Args& a) {
+            self->pie_ = a.size() > 1 && a[1] == "views" ? 2 : 1, self->pieStays_ = true;
+            self->pieAt_ = ImVec2((self->viewMin_.x + self->viewMax_.x) / 2, (self->viewMin_.y + self->viewMax_.y) / 2);
+        }, "Fry3DX: show a pie menu (tools | views)");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
             if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
@@ -608,6 +618,8 @@ public:
         newScene();
         loadOwnMaterials();
         loadPlugins();
+        loadMyKeys();
+        buildCommands();
         if (!startPath_.empty()) openFile(startPath_);
         findAutosaves();
         if (startPath_.empty()) resumeWork();
@@ -682,6 +694,7 @@ public:
         takeDialogResult();
         ImGuiIO& io = ImGui::GetIO();
         if (touch()) touchFrame(io);
+        if (!pendingLayout_.empty()) ImGui::LoadIniSettingsFromMemory(pendingLayout_.data(), pendingLayout_.size()), pendingLayout_.clear(); // (a workspace: before any panel)
         const ImGuiID dock = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
         if (touch() && (io.DisplaySize.y > io.DisplaySize.x) != portrait_) portrait_ = !portrait_, layoutDone_ = false; // (the phone turned: its layout)
         if (!layoutDone_) defaultLayout(dock);
@@ -702,6 +715,8 @@ public:
         if (showScript_) scriptPanel();
         if (showHelp_) helpWindow();
         if (showAbout_) aboutWindow();
+        if (showHistory_) historyWindow();
+        if (showWorkspaces_) workspacesWindow();
         if (showPlugins_) pluginsWindow();
         commandForm();
         copiesWindow();
@@ -709,7 +724,9 @@ public:
         pushWindow();
         saveQuestion();
         recoverWindow();
-        if (!askSave_ && !showRecover_) shortcuts(io);
+        commandSearch();
+        if (!askSave_ && !showRecover_ && !search_.open) shortcuts(io);
+        if (pie_) return draw3D(r), overlays(), pieFrame(io);
         viewport(io);
         draw3D(r);
         overlays();
@@ -727,6 +744,8 @@ private:
         Mode mode;
         std::set<int> verts, faces;
         std::set<std::pair<int, int>> edges;
+        std::string label; // (what was done after it: the message said then)
+        double at = 0;
     };
     std::vector<Snapshot> undo_, redo_;
     std::vector<Snapshot> redoKept_; // (what redo had before the last undo point: back if that step is dropped)
@@ -967,6 +986,20 @@ private:
     };
     std::vector<PluginEntry> plugins_;
     bool showPlugins_ = false;
+    // ── Commands: found by typing, on keys of your own, round the mouse ──
+    std::vector<fry::Command> commands_;
+    fry::CommandSearch search_;
+    std::vector<std::string> recentCommands_;
+    std::map<std::string, fry::Chord> myKeys_; // (a command's id: the key you gave it)
+    int pie_ = 0;                              // 1: the tools round the mouse (Space held), 2: the views (Shift+Space)
+    ImVec2 pieAt_{0, 0};
+    bool pieStays_ = false; // (opened from the menu or console: until a click)
+    std::string settingKey_;
+    bool showHistory_ = false;
+    // ── Workspaces: the panels as they were, kept under a name ──
+    bool showWorkspaces_ = false, layoutAgain_ = false;
+    std::string pendingLayout_;
+    char workspaceName_[64] = "My workspace";                   // (the command waiting for its new key, in Keys and mouse)
     // A plug-in's command waiting for its settings (the form), and a material being named.
     struct PendingCommand {
         size_t plugin = 0, command = 0;
@@ -1009,11 +1042,12 @@ private:
     void handMade(Object& o) { o.recipe.clear(), o.settings.clear(); }
     void say(std::string text) {
         message_ = std::move(text), messageAt_ = now();
+        if (!undo_.empty() && undo_.back().label.empty() && now() - undo_.back().at < 1.0) undo_.back().label = message_; // (names the step just done)
         keel::log::info("{}", message_);
     }
 
     void pushUndo() {
-        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
+        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, "", now()});
         if (undo_.size() > 200) undo_.erase(undo_.begin());
         redoKept_ = std::move(redo_), redo_.clear();
         dirty_ = true, ++edits_;
@@ -1041,14 +1075,14 @@ private:
     }
     void undo() {
         if (undo_.empty()) return say("Nothing to undo");
-        redo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
+        redo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, undo_.back().label, now()}); // (its name: the step it brings back)
         restore(undo_.back());
         undo_.pop_back();
         redoKept_.clear();
     }
     void redo() {
         if (redo_.empty()) return say("Nothing to redo");
-        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_});
+        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, redo_.back().label, now() - 10});
         restore(redo_.back());
         redo_.pop_back();
         redoKept_.clear();
@@ -1650,6 +1684,48 @@ private:
         for (int v : sel)
             if (!border.count(v)) keep.insert(v);
         selectPoints(keep);
+    }
+    // Like the picked: faces that face the same way, edges as long, points with as many edges.
+    void selectSimilar() {
+        Object* o = editing();
+        if (!o) return;
+        const Mesh& m = o->mesh;
+        if (elem_ == Elem::Face) {
+            std::vector<glm::vec3> ns;
+            for (int f : selFaces_) ns.push_back(faceNormal(m, f));
+            if (ns.empty()) return say("Pick a face first");
+            for (size_t f = 0; f < m.faces.size(); ++f)
+                for (const glm::vec3& n : ns)
+                    if (glm::dot(faceNormal(m, int(f)), n) > 0.996f) selFaces_.insert(int(f));
+        } else if (elem_ == Elem::Edge) {
+            std::vector<float> lens;
+            for (auto [a, b] : selEdges_) lens.push_back(glm::distance(m.verts[size_t(a)], m.verts[size_t(b)]));
+            if (lens.empty()) return say("Pick an edge first");
+            for (auto [a, b] : edges(m)) {
+                const float l = glm::distance(m.verts[size_t(a)], m.verts[size_t(b)]);
+                for (float k : lens)
+                    if (std::abs(l - k) <= k * 0.02f + 1e-6f) selEdges_.insert({a, b});
+            }
+        } else {
+            std::vector<int> count(m.verts.size(), 0);
+            for (auto [a, b] : edges(m)) ++count[size_t(a)], ++count[size_t(b)];
+            std::set<int> want;
+            for (int v : selVerts_) want.insert(count[size_t(v)]);
+            if (want.empty()) return say("Pick a point first");
+            for (size_t v = 0; v < m.verts.size(); ++v)
+                if (want.count(count[size_t(v)])) selVerts_.insert(int(v));
+        }
+        say("Picked the similar ones");
+    }
+    // The picked edges' whole loops (or the rings across them).
+    void loopsOfSelected(bool ring) {
+        Object* o = editing();
+        if (!o) return;
+        if (elem_ != Elem::Edge || selEdges_.empty()) return say("Pick an edge or two first (Edges, 2)");
+        std::set<std::pair<int, int>> add;
+        for (auto e : selEdges_)
+            for (auto f : ring ? edgeRing(o->mesh, e) : edgeLoop(o->mesh, e)) add.insert(f);
+        selEdges_.insert(add.begin(), add.end());
     }
     void selectLinked() {
         if (Object* o = editing()) selectPoints(linkedVerts(o->mesh, selectedPoints()));
@@ -4776,6 +4852,13 @@ private:
         if (io.WantTextInput) return;
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
         auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
+        if (key(ImGuiKey_F3) || (ctrl && key(ImGuiKey_Space))) return openSearch();
+        if (!settingKey_.empty()) return; // (Keys and mouse is waiting for a key)
+        if (const auto chord = fry::pressedChord())
+            for (const auto& [id, c] : myKeys_)
+                if (c == *chord) return void(runCommand(id));
+        if (key(ImGuiKey_Space) && !ctrl && !alt && mouseInView(io) && (tab_ == Tab::Model || tab_ == Tab::Render || tab_ == Tab::Print))
+            return void((pie_ = shift ? 2 : 1, pieAt_ = io.MousePos));
         if (key(ImGuiKey_F5)) return runScriptNow();
         if (ctrl && key(ImGuiKey_1)) setTab(Tab::Model);
         if (ctrl && key(ImGuiKey_2)) setTab(Tab::Paint);
@@ -5439,7 +5522,7 @@ private:
     void defaultLayout(ImGuiID dock) {
         layoutDone_ = true;
         ImGuiDockNode* node = ImGui::DockBuilderGetNode(dock);
-        if (!touch() && node && (node->IsSplitNode() || node->Windows.Size)) return; // (the user's own, from the .ini)
+        if (!touch() && !std::exchange(layoutAgain_, false) && node && (node->IsSplitNode() || node->Windows.Size)) return; // (the user's own, from the .ini)
         ImGui::DockBuilderRemoveNodeChildNodes(dock);
         ImGui::DockBuilderSetNodeSize(dock, ImGui::GetMainViewport()->WorkSize); // (splits are shares of this)
         ImGuiID center = dock;
@@ -5481,6 +5564,180 @@ private:
         ImGui::DockBuilderDockWindow("Status", bottom);
         if (ImGuiDockNode* b = ImGui::DockBuilderGetNode(bottom)) b->SetLocalFlags(ImGuiDockNodeFlags_NoTabBar);
         ImGui::DockBuilderFinish(dock);
+    }
+
+    // ───────────────────────────── commands ─────────────────────────────
+
+    // Everything that can be done, by name: for the command search, keys of your own, the pies.
+    void buildCommands() {
+        commands_.clear();
+        auto add = [&](std::string id, std::string name, std::string group, std::string keys, std::function<void()> run, std::function<bool()> ok = {}, std::string words = {}) {
+            commands_.push_back({std::move(id), std::move(name), std::move(group), std::move(keys), std::move(run), std::move(ok), std::move(words)});
+        };
+        auto editing = [this] { return mode_ == Mode::Edit; };
+        auto picked = [this] { return !selected_.empty(); };
+        auto many = [this] { return selected_.size() >= 2 && mode_ == Mode::Object; };
+        auto model = [this] { return tab_ == Tab::Model; };
+        add("file.new", "New", "File", "Ctrl+N", [this] { whenSaved(2); }, {}, "empty start");
+        add("file.open", "Open...", "File", "Ctrl+O", [this] { whenSaved(3); }, {}, "load fry");
+        add("file.import", "Import a model (STL, OBJ, 3MF)...", "File", "Ctrl+Shift+O", [this] { dialog(12); }, {}, "load mesh stl obj 3mf");
+        add("file.save", "Save", "File", "Ctrl+S", [this] { path_.empty() ? dialog(2) : void(saveFile(path_)); });
+        add("file.saveas", "Save as...", "File", "Ctrl+Shift+S", [this] { dialog(2); });
+        add("file.export", "Export (GLB, glTF, OBJ, STL, PLY, 3MF, FBX)...", "File", "Ctrl+E", [this] { dialog(3); }, {}, "stl obj gltf glb ply fbx 3mf print");
+        add("file.picture", "Save a picture of the view...", "File", "F12", [this] { dialog(5); }, {}, "screenshot render png");
+        add("file.recover", "Recover autosaved work...", "File", "", [this] { findAutosaves(), showRecover_ = !recover_.empty(); });
+        add("file.quit", "Quit", "File", "Ctrl+Q", [this] { whenSaved(1); }, {}, "exit close");
+        add("edit.undo", "Undo", "Edit", "Ctrl+Z", [this] { undo(); }, [this] { return !undo_.empty(); });
+        add("edit.redo", "Redo", "Edit", "Ctrl+Y", [this] { redo(); }, [this] { return !redo_.empty(); });
+        add("edit.history", "Undo history", "Edit", "", [this] { showHistory_ = true; }, {}, "steps back");
+        add("edit.duplicate", "Duplicate", "Edit", "Ctrl+D", [this] { duplicateSelected(); }, [=, this] { return picked() && mode_ == Mode::Object; }, "copy clone");
+        add("edit.join", "Join into one", "Edit", "Ctrl+J", [this] { joinSelected(); }, many, "merge objects");
+        add("edit.delete", "Delete", "Edit", "Del", [this] { deleteSelected(); }, {}, "remove erase");
+        add("edit.shape", "Edit the shape / stop", "Edit", "Tab", [this] { mode_ == Mode::Edit ? leaveEdit() : enterEdit(); }, [=, this] { return editing() || picked(); }, "edit mode points faces");
+        add("select.all", "Select all", "Select", "Ctrl+A", [this] { selectAll(); });
+        add("select.none", "Select none", "Select", "Alt+A", [this] { selectNone(); }, {}, "deselect");
+        add("select.invert", "Invert the selection", "Select", "Ctrl+I", [this] { invertSelection(); });
+        add("select.grow", "Select more (grow)", "Select", "Ctrl +", [this] { growSelection(); }, editing);
+        add("select.shrink", "Select less (shrink)", "Select", "Ctrl -", [this] { shrinkSelection(); }, editing);
+        add("select.linked", "Select everything joined to it", "Select", "L", [this] { selectLinked(); }, editing, "linked connected");
+        add("select.similar", "Select similar faces (facing the same way)", "Select", "Shift+G", [this] { selectSimilar(); }, editing, "same normal size");
+        add("select.loop", "Select whole loops (of the picked edges)", "Select", "", [this] { loopsOfSelected(false); }, editing, "edge loop");
+        add("select.ring", "Select rings (across the picked edges)", "Select", "", [this] { loopsOfSelected(true); }, editing, "edge ring");
+        for (const auto& [t, n] : std::initializer_list<std::pair<SelShape, const char*>>{{SelShape::Box, "box"}, {SelShape::Brush, "brush"}, {SelShape::Lasso, "lasso"}})
+            add(std::string("select.with.") + n, std::string("Select with a ") + n, "Select", "", [this, t] { selShape_ = t; });
+        for (const ShapeRecipe& r : shapeRecipes())
+            add(std::string("add.") + r.id, std::string("Add ") + (r.starter ? "a starter " : "a ") + r.name, "Add", "", [this, id = std::string(r.id)] { setTab(Tab::Model), addShape(id); }, {},
+                r.starter ? "starter model" : "shape primitive");
+        add("add.text", "Add text (3D letters)...", "Add", "", [this] { setTab(Tab::Model), showText_ = true; }, {}, "font letters words label name");
+        add("add.draw", "Draw a shape", "Add", "D", [this] { if (mode_ == Mode::Edit) leaveEdit(); setTool(Tool::Draw); }, {}, "sketch outline polygon");
+        add("add.picture", "Add a reference picture...", "Add", "", [this] { dialog(4); }, {}, "image background blueprint");
+        add("object.goto", "Go to it (the camera)", "Object", "F", [this] { goTo(selected_); }, picked, "frame focus");
+        add("object.copies", "Make copies (in a row, round, along a path)...", "Object", "", [this] { showCopies_ = true; }, picked, "array repeat pattern circular curve");
+        add("object.group", "Group into a folder", "Object", "Ctrl+G", [this] { groupSelected(); }, picked);
+        add("object.add", "Add them together", "Object", "Ctrl+Shift++", [this] { combineSelected(Combine::Add); }, many, "boolean union");
+        add("object.subtract", "Take the others out of it", "Object", "Ctrl+Shift+-", [this] { combineSelected(Combine::Subtract); }, many, "boolean difference cut");
+        add("object.overlap", "Keep only where they overlap", "Object", "", [this] { combineSelected(Combine::Overlap); }, many, "boolean intersect");
+        add("object.thicken", "Make it thick (or hollow)...", "Object", "", [this] { showThicken_ = true; }, picked, "shell solidify wall");
+        add("object.cleanflat", "Join flat faces side by side", "Object", "", [this] { cleanFlatFaces(); }, picked, "dissolve tidy");
+        add("object.spin", "Spin (turn its outline round an axis)...", "Object", "", [this] { showSpin_ = true; }, [this] { return !selected_.empty(); }, "lathe screw revolve");
+        add("object.repair", "Repair for printing (close holes, fix faces)", "Print", "", [this] { repairSelected(); }, picked, "fix manifold watertight holes");
+        add("object.scale", "Scale to a size (mm)...", "Print", "", [this] { setTab(Tab::Print), showPrintSize_ = true; }, picked, "resize fit dimensions percent scaler");
+        for (const ToolInfo& t : kTools)
+            add(std::string("tool.") + t.name, std::string("Tool: ") + t.name, "Tools", t.key, [this, tool = t.tool, obj = t.objectMode] {
+                if (tab_ != Tab::Model) setTab(Tab::Model);
+                if (!obj && mode_ != Mode::Edit) enterEdit();
+                setTool(tool);
+            });
+        add("shape.subdivide", "Cut every face in four", "Shape", "", [this] { subdivideNow(false); }, editing, "subdivide");
+        add("shape.smoothall", "Smooth it all (cut and round)", "Shape", "", [this] { subdivideNow(true); }, editing, "subdivision surface");
+        add("shape.merge", "Merge points", "Shape", "M", [this] { mergeNow(); }, editing, "weld collapse");
+        add("shape.face", "Make a face", "Shape", "", [this] { makeFaceNow(); }, editing, "fill");
+        add("shape.flip", "Flip faces", "Shape", "", [this] { flipNow(); }, editing, "normals reverse");
+        add("shape.smooth", "Smooth points", "Shape", "", [this] { smoothPointsNow(); }, editing, "relax");
+        add("shape.push", "Push out / pull in...", "Shape", "Alt+S", [this] { startPush(); }, editing, "shrink fatten inflate");
+        add("shape.bridge", "Bridge two faces", "Shape", "", [this] { bridgeNow(); }, editing, "tunnel connect");
+        add("shape.soft", "Soft selection on / off", "Shape", "Shift+O", [this] { softSel_ = !softSel_; }, {}, "proportional falloff");
+        add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
+        add("shape.slide", "Slide the points along their edges...", "Shape", "", [this] { startSlide(); }, editing, "edge slide vertex slide");
+        add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_; }, {}, "symmetry symmetric x");
+        add("view.solid", "Show: solid", "View", "Z", [this] { shading_ = Shading::Solid; });
+        add("view.rendered", "Show: rendered (sky, sun, shadows)", "View", "Z", [this] { shading_ = Shading::Rendered; });
+        add("view.wire", "Show: wireframe", "View", "Shift+Z", [this] { shading_ = Shading::Wire; });
+        add("view.xray", "X-ray on / off", "View", "Alt+Z", [this] { xray_ = !xray_; }, {}, "see through");
+        add("view.grid", "Grid on / off", "View", "", [this] { showGrid_ = !showGrid_; });
+        add("view.persp", "View: perspective", "View", "Numpad 5", [this] { leaveFlatView(); });
+        for (const auto& [v, n, k] : std::initializer_list<std::tuple<View, const char*, const char*>>{
+                 {View::Front, "front", "Numpad 1"}, {View::Back, "back", "Shift+Numpad 1"}, {View::Left, "left side", "Numpad 3"}, {View::Right, "right side", "Shift+Numpad 3"},
+                 {View::Top, "top", "Numpad 7"}, {View::Bottom, "bottom", "Shift+Numpad 7"}})
+            add(std::string("view.") + n, std::string("View: ") + n, "View", k, [this, v] { setView(v); }, {}, "orthographic camera");
+        add("view.frame", "Frame the selected", "View", "F", [this] { frameSelected(); }, {}, "zoom focus");
+        add("view.all", "Frame everything", "View", "Home", [this] { frameAll(); }, {}, "zoom extents");
+        add("view.only", "Show only the selected (again: all)", "View", "/", [this] { showOnly(selected_); }, picked, "isolate local view hide");
+        add("view.unhide", "Show everything", "View", "Alt+H", [this] { for (Object& o : scene_.objects) o.visible = true; }, {}, "unhide");
+        add("view.layout", "Put the panels back as they were", "View", "", [this] { resetLayout(); }, {}, "reset layout workspace default panels");
+        add("view.workspace", "Workspaces (save the panels as they are)...", "View", "", [this] { showWorkspaces_ = true; }, {}, "layout save panels");
+        for (int i = 0; i < 3; ++i)
+            add(std::string("view.look") + char('0' + i), std::string("Appearance: ") + (i == 0 ? "like the desktop" : i == 1 ? "dark" : "light"), "View", "",
+                [i] { keel::execute(std::format("fry_theme {}", i)); }, {}, "theme colours");
+        const char* tabs[] = {"Model", "Paint", "Layout", "Render", "Print"};
+        for (int i = 0; i < 5; ++i)
+            add(std::string("tab.") + tabs[i], std::string("Go to ") + tabs[i], "Tabs", std::format("Ctrl+{}", i + 1), [this, i] { setTab(Tab(i)); }, {}, i == 1 ? "sculpt texture" : "");
+        add("script.panel", "The Script panel", "Script", "", [this] { showScript_ = !showScript_; }, {}, "lua code");
+        add("script.run", "Run the script", "Script", "F5", [this] { runScriptNow(); }, [this] { return currentScript() != nullptr; });
+        add("script.new", "New script", "Script", "", [this] { addScript("Script", kFirstScript); });
+        add("script.plugins", "Plug-ins...", "Script", "", [this] { showPlugins_ = true; }, {}, "addons extensions");
+        add("help.keys", "Keys and mouse (and your own keys)", "Help", "F1", [this] { showHelp_ = true; }, {}, "shortcuts hotkeys keymap bind");
+        add("help.about", "About Fry3DX", "Help", "", [this] { showAbout_ = true; }, {}, "version");
+        add("help.search", "Search for a command", "Help", "F3", [this] { openSearch(); }, {}, "find palette");
+        for (size_t i = 0; i < plugins_.size(); ++i)
+            if (pluginUsable(i))
+                for (size_t c = 0; c < plugins_[i].p->commands.size(); ++c) {
+                    const fry::PluginCommand& cmd = plugins_[i].p->commands[c];
+                    add("plugin." + plugins_[i].file + "." + cmd.name, cmd.name + (cmd.settings.empty() ? "" : "..."), "Plug-in: " + plugins_[i].p->name, "", [this, i, c] {
+                        if (i >= plugins_.size() || !pluginUsable(i) || c >= plugins_[i].p->commands.size()) return;
+                        const fry::PluginCommand& cm = plugins_[i].p->commands[c];
+                        if (cm.settings.empty()) return runPluginCommand(i, c, {});
+                        pendingCommand_ = PendingCommand{i, c, {}};
+                        for (const auto& [n, v] : cm.settings) pendingCommand_->values.push_back(v);
+                    }, {}, cmd.help);
+                }
+        (void)model;
+    }
+    void openSearch() {
+        buildCommands();
+        search_.show();
+    }
+    void runCommand(const std::string& id) {
+        for (const fry::Command& c : commands_)
+            if (c.id == id) {
+                if (!c.usable()) return say(c.name + ": not now (" + (c.group == "Shape" ? "edit a shape first, Tab" : "pick something first") + ")");
+                std::erase(recentCommands_, id);
+                recentCommands_.insert(recentCommands_.begin(), id);
+                if (recentCommands_.size() > 8) recentCommands_.pop_back();
+                return c.run();
+            }
+    }
+    void commandSearch() {
+        if (!search_.open) return;
+        if (const int i = search_.draw(commands_, recentCommands_); i >= 0) runCommand(commands_[size_t(i)].id);
+    }
+    // The pies: the tools (Space), or the views (Shift+Space), round the mouse while it's held.
+    void pieFrame(ImGuiIO& io) {
+        const bool released = !pieStays_ && !ImGui::IsKeyDown(ImGuiKey_Space);
+        std::vector<fry::PieItem> items;
+        std::vector<std::function<void()>> runs;
+        if (pie_ == 1) {
+            for (const ToolInfo& t : kTools)
+                if (mode_ == Mode::Edit ? t.editMode : t.objectMode)
+                    items.push_back({t.name, t.icon, true, tool_ == t.tool}), runs.push_back([this, tool = t.tool] { setTool(tool); });
+            items.push_back({mode_ == Mode::Edit ? "Done (objects)" : "Edit the shape", mode_ == Mode::Edit ? Icon::Objects : Icon::Shape, true, false});
+            runs.push_back([this] { mode_ == Mode::Edit ? leaveEdit() : enterEdit(); });
+        } else {
+            const std::pair<View, const char*> views[] = {{View::Top, "Top"}, {View::Right, "Right"}, {View::Front, "Front"}, {View::Perspective, "3D"},
+                                                          {View::Bottom, "Bottom"}, {View::Back, "Back"}, {View::Left, "Left"}};
+            for (const auto& [v, n] : views) {
+                items.push_back({n, Icon::Select, false, view_ == v});
+                runs.push_back([this, v] { v == View::Perspective ? leaveFlatView() : setView(v); });
+            }
+            items.push_back({"Frame", Icon::Select, false, false}), runs.push_back([this] { frameSelected(); });
+        }
+        const int got = fry::pieMenu(pie_ == 1 ? "Tools" : "Views", pieAt_, items, released);
+        if (got == -1) return;
+        if (got >= 0) runs[size_t(got)]();
+        pie_ = 0, pieStays_ = false;
+        (void)io;
+    }
+    // Keys of your own: kept in keys.txt (a line each: the command's id, a tab, the key).
+    void loadMyKeys() {
+        myKeys_.clear();
+        std::ifstream in(keel::prefPath() + "keys.txt");
+        for (std::string line; std::getline(in, line);)
+            if (const size_t tab = line.find('\t'); tab != std::string::npos)
+                if (const auto c = fry::parseChord(line.substr(tab + 1))) myKeys_[line.substr(0, tab)] = *c;
+    }
+    void saveMyKeys() {
+        std::ofstream out(keel::prefPath() + "keys.txt");
+        for (const auto& [id, c] : myKeys_) out << id << '\t' << fry::chordName(c) << '\n';
     }
 
     void menus() {
@@ -7209,6 +7466,9 @@ private:
             }
             ImGui::EndTable();
         };
+        rows("Finding things", {{"F3 or Ctrl+Space", "Search for any command by name and run it"}, {"Space (held)", "The tools round the mouse: point at one, let go"},
+                                {"Shift+Space (held)", "The views round the mouse"}});
+        myKeysTable();
         rows("Looking around", {{"Right drag", "Orbit round what you look at"}, {"Middle drag / Shift+Right drag", "Pan"}, {"Wheel", "Zoom (towards the mouse)"},
                                 {"Orbit / Pan / Zoom buttons", "Drag them (touchpads)"}, {"F", "Frame the selection"}, {"Home", "Frame everything"},
                                 {"Numpad 1 / 3 / 7", "Front / side / top (Shift: the opposite)"}, {"Numpad 5", "Flat view / 3D"},
@@ -7235,6 +7495,126 @@ private:
         rows("Files", {{"Ctrl+N / O / S", "New / open / save"}, {"Ctrl+Shift+S", "Save as"}, {"Ctrl+E", "Export (GLB, glTF, FBX, OBJ, 3MF, STL, PLY)"}, {"F12", "Save a picture of the view"},
                        {"Ctrl+Z / Ctrl+Y", "Undo / redo"}});
         ImGui::End();
+    }
+
+    // Keys of your own: any command on any key (they come before the usual ones).
+    void myKeysTable() {
+        static char filter[64] = {};
+        if (!ImGui::CollapsingHeader("Your own keys")) return;
+        if (commands_.empty()) buildCommands();
+        ImGui::TextWrapped("Give any command a key: click Set, then press the key (with Ctrl, Shift or Alt if you like). Your keys come before the usual ones.");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##kf", "Find a command", filter, sizeof filter);
+        if (!settingKey_.empty()) {
+            ImGui::TextColored(accentText(), "Press the key for it now (Esc: never mind)");
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) settingKey_.clear();
+            else if (const auto c = fry::pressedChord()) {
+                std::erase_if(myKeys_, [&](const auto& kv) { return kv.second == *c; }); // (a key does one thing)
+                myKeys_[settingKey_] = *c;
+                saveMyKeys();
+                settingKey_.clear();
+            }
+        }
+        if (!ImGui::BeginTable("mykeys", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 260))) return;
+        ImGui::TableSetupColumn("what");
+        ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed, 130);
+        ImGui::TableSetupColumn("do", ImGuiTableColumnFlags_WidthFixed, 96);
+        for (const fry::Command& c : commands_) {
+            if (filter[0] && !fry::commandScore(c, filter)) continue;
+            ImGui::PushID(c.id.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(c.name.c_str());
+            ImGui::TableNextColumn();
+            const auto mine = myKeys_.find(c.id);
+            if (mine != myKeys_.end()) ImGui::TextColored(accentText(), "%s", fry::chordName(mine->second).c_str());
+            else ImGui::TextDisabled("%s", c.keys.c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton(settingKey_ == c.id ? "..." : "Set")) settingKey_ = c.id;
+            if (mine != myKeys_.end()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear")) myKeys_.erase(c.id), saveMyKeys();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    // ── (being made) ──
+    bool showText_ = false, showSpin_ = false, showPrintSize_ = false, liveMirror_ = false;
+    void repairSelected() {}
+    void startSlide() {}
+
+    std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }
+    void resetLayout() {
+        layoutAgain_ = true, layoutDone_ = false;
+        say("The panels are back where they started");
+    }
+    void workspacesWindow() {
+        ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Workspaces", &showWorkspaces_, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) return ImGui::End();
+        ImGui::TextWrapped("The panels as they are now, kept under a name: one for modelling, one for painting, one for a small screen...");
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputText("##wname", workspaceName_, sizeof workspaceName_);
+        ImGui::SameLine();
+        if (ImGui::Button("Keep") && workspaceName_[0]) {
+            std::error_code ec;
+            stdfs::create_directories(workspaceDir(), ec);
+            size_t size = 0;
+            const char* ini = ImGui::SaveIniSettingsToMemory(&size);
+            std::ofstream(workspaceDir() + fileSafe(workspaceName_) + ".ini", std::ios::binary).write(ini, std::streamsize(size));
+            say(std::format("Workspace \"{}\" kept", workspaceName_));
+        }
+        ImGui::SeparatorText("Kept");
+        if (ImGui::Selectable("As it started (the usual)")) resetLayout();
+        std::error_code ec;
+        std::vector<stdfs::path> kept;
+        for (const auto& e : stdfs::directory_iterator(workspaceDir(), ec))
+            if (e.path().extension() == ".ini") kept.push_back(e.path());
+        std::sort(kept.begin(), kept.end());
+        for (const stdfs::path& f : kept) {
+            ImGui::PushID(f.string().c_str());
+            if (ImGui::Selectable(f.stem().string().c_str(), false, ImGuiSelectableFlags_AllowOverlap, ImVec2(250, 0))) {
+                std::ifstream in(f, std::ios::binary);
+                pendingLayout_.assign(std::istreambuf_iterator<char>(in), {});
+                say("Workspace: " + f.stem().string());
+            }
+            ImGui::SameLine(270);
+            if (ImGui::SmallButton("Delete")) stdfs::remove(f, ec);
+            ImGui::PopID();
+        }
+        ImGui::End();
+    }
+    static std::string fileSafe(std::string n) {
+        for (char& c : n)
+            if (std::strchr("\\/:*?\"<>|", c)) c = '_';
+        return n;
+    }
+
+    // The steps that can be undone, oldest first: a click goes back (or on) to just after it.
+    void historyWindow() {
+        ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Undo history", &showHistory_)) return ImGui::End();
+        int back = 0, on = 0; // (how many undos / redos the click asks for)
+        if (ImGui::Selectable("The start", undo_.empty())) back = int(undo_.size());
+        for (size_t i = 0; i < undo_.size(); ++i) {
+            const std::string& l = undo_[i].label;
+            ImGui::PushID(int(i));
+            if (ImGui::Selectable(l.empty() ? "A change" : l.c_str(), i + 1 == undo_.size())) back = int(undo_.size() - 1 - i);
+            ImGui::PopID();
+        }
+        for (size_t i = redo_.size(); i-- > 0;) { // (what redo would bring back, greyed)
+            ImGui::PushID(int(10000 + i));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            const std::string& l = redo_[i].label;
+            if (ImGui::Selectable(l.empty() ? "A change (undone)" : (l + "  (undone)").c_str())) on = int(redo_.size() - i);
+            ImGui::PopStyleColor();
+            ImGui::PopID();
+        }
+        if (undo_.size() >= 200) ImGui::TextDisabled("(the 200 latest steps are kept)");
+        ImGui::End();
+        for (int i = 0; i < back; ++i) undo();
+        for (int i = 0; i < on; ++i) redo();
     }
 
     void aboutWindow() {
