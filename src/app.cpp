@@ -586,6 +586,11 @@ public:
         static keel::Cmd text("fry_text", [](const keel::Args& a) {
             if (a.size() > 1) std::snprintf(self->textBuf_, sizeof self->textBuf_, "%s", a[1].c_str()), self->addText();
         }, "Fry3DX: add text as a shape");
+        static keel::Cmd spinCmd("fry_spin", [](const keel::Args& a) { // fry_spin degrees steps [rise_mm] [world]
+            if (a.size() > 2) self->spinDegrees_ = std::stof(a[1]), self->spinSteps_ = std::stoi(a[2]);
+            self->spinRise_ = a.size() > 3 ? std::stof(a[3]) / 1000 : 0.0f, self->spinWorld_ = a.size() > 4 && a[4] == "world";
+            self->spinSelected();
+        }, "Fry3DX: spin the picked shape round Z: degrees steps [rise mm] [world]");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
             if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
@@ -715,6 +720,7 @@ public:
         thickenWindow();
         textWindow();
         printSizeWindow();
+        spinWindow();
         pushWindow();
         saveQuestion();
         recoverWindow();
@@ -3803,6 +3809,60 @@ private:
         const glm::vec3 size = (hi - lo) * 1000.0f;
         say(std::format("{}: {} object{}, {} faces, {:.1f} x {:.1f} x {:.1f} mm", fileName(file), got.size(), got.size() == 1 ? "" : "s", faces, size.x, size.y, size.z));
         if (glm::length(hi - lo) > 0) frameSelected();
+    }
+
+    // ── Spin: an outline turned round an axis (a vase, a wheel, a ring), or a screw ──
+    bool showSpin_ = false, spinWorld_ = false, spinKeep_ = false;
+    int spinAxis_ = 2, spinSteps_ = 48;
+    float spinDegrees_ = 360.0f, spinRise_ = 0.0f;
+    void spinWindow() {
+        if (!showSpin_) return;
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::Begin("Spin", &showSpin_, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) return ImGui::End();
+        const float w = 300;
+        ImGui::PushTextWrapPos(w);
+        ImGui::TextUnformatted("The picked shape turned round an axis: draw half a vase's outline beside it, spin it all the way round. Its open edges become the walls.");
+        ImGui::PopTextWrapPos();
+        ImGui::SetNextItemWidth(w);
+        ImGui::Combo("##axis", &spinAxis_, "Round X (across)\0Round Y (deep)\0Round Z (up)\0");
+        ImGui::SetNextItemWidth(w);
+        int where = spinWorld_;
+        if (ImGui::Combo("##where", &where, "Through the shape's own origin\0Through the middle of the world\0")) spinWorld_ = where;
+        ImGui::SetNextItemWidth(w);
+        ImGui::DragFloat("##deg", &spinDegrees_, 1.0f, -3600, 3600, "%.0f degrees");
+        ImGui::SetNextItemWidth(w);
+        ImGui::DragInt("##steps", &spinSteps_, 0.5f, 3, 512, "%d steps");
+        float mm = spinRise_ * 1000;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::DragFloat("##rise", &mm, 0.5f, -1e5f, 1e5f, mm == 0 ? "no rise (a spin)" : "rises %.1f mm (a screw)")) spinRise_ = mm / 1000;
+        ImGui::Checkbox("Keep the outline too", &spinKeep_);
+        pushAccent();
+        if (ImGui::Button("Spin it", ImVec2(w, 0))) spinSelected();
+        popAccent();
+        ImGui::End();
+    }
+    void spinSelected() {
+        Object* o = find(active_);
+        if (!o || !selected_.count(o->id)) return say("Pick the shape to spin first");
+        if (o->locked) return say(o->name + " is locked");
+        if (checkForPrint(shownMesh(*o)).openEdges == 0)
+            return say("Spin turns an outline or an open surface (a drawn shape, half a vase's side): this one is closed all round");
+        if (mode_ == Mode::Edit) leaveEdit();
+        pushUndo();
+        Mesh world = shownMesh(*o);
+        transform(world, objectMatrix(*o));
+        glm::vec3 axis(0.0f);
+        axis[spinAxis_] = 1.0f;
+        Mesh m = fry::spin(world, spinWorld_ ? glm::vec3(0.0f) : o->position, axis, spinDegrees_, spinSteps_, spinRise_);
+        if (m.faces.empty()) return takeBack(), say("Nothing to spin");
+        transform(m, glm::translate(glm::mat4(1.0f), -o->position));
+        Object& made = spinKeep_ ? addObject(o->name + " spun", Mesh{}) : *o;
+        if (spinKeep_) made.position = find(active_)->position, made.color = find(active_)->color;
+        made.mesh = std::move(m), made.rotation = glm::quat(1, 0, 0, 0), made.scale = glm::vec3(1.0f);
+        made.mirror = 0, made.round = 0, made.smoothLevels = 0; // (spun as it showed: its finish is in the shape now)
+        handMade(made), touched(made.id);
+        selected_ = {made.id}, active_ = made.id;
+        say(std::format("Spun {:.0f} degrees{}: {} faces", spinDegrees_, spinRise_ != 0 ? std::format(", rising {:.1f} mm", spinRise_ * 1000) : "", made.mesh.faces.size()));
     }
 
     // ── Text as a shape ──
@@ -7763,7 +7823,7 @@ private:
     }
 
     // ── (being made) ──
-    bool showSpin_ = false, showPrintSize_ = false, liveMirror_ = false;
+    bool showPrintSize_ = false, liveMirror_ = false;
     void repairSelected() {}
     void startSlide() {}
 

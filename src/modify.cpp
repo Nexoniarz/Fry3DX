@@ -1,6 +1,8 @@
 // Whole-shape changes: flat faces joined up, and a surface made thick.
 #include "mesh.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -102,6 +104,52 @@ void thicken(Mesh& m, float thickness) {
         if (!directed.count({b, a})) m.faces.push_back({b, a, a + int(n), b + int(n)});
     if (thickness < 0) // (made outwards: the new side is the outside)
         for (auto& f : m.faces) std::reverse(f.begin(), f.end());
+}
+
+Mesh spin(const Mesh& m, const glm::vec3& origin, const glm::vec3& axis, float degrees, int steps, float rise) {
+    if (m.verts.empty() || glm::length(axis) < 1e-9f) return m;
+    const glm::vec3 ax = glm::normalize(axis);
+    steps = std::clamp(steps, 1, 4096);
+    const bool round = std::abs(std::abs(degrees) - 360.0f) < 1e-3f && std::abs(rise) < 1e-9f; // (back where it started: no ends)
+    const int copies = round ? steps : steps + 1;
+    const int n = int(m.verts.size());
+    Mesh out;
+    out.verts.reserve(size_t(n * copies));
+    for (int k = 0; k < copies; ++k) {
+        const float t = float(k) / float(steps);
+        const glm::mat4 turn = glm::translate(glm::mat4(1.0f), origin + ax * (rise * t)) * glm::rotate(glm::mat4(1.0f), glm::radians(degrees * t), ax) * glm::translate(glm::mat4(1.0f), -origin);
+        for (const glm::vec3& v : m.verts) out.verts.push_back(glm::vec3(turn * glm::vec4(v, 1.0f)));
+    }
+    auto at = [&](int k, int v) { return (k % copies) * n + v; };
+    // What sweeps: edges with one face (a surface's rim, a flat shape's outline), each once.
+    std::map<std::pair<int, int>, int> count;
+    for (const auto& f : m.faces)
+        for (size_t i = 0; i < f.size(); ++i) ++count[{std::min(f[i], f[(i + 1) % f.size()]), std::max(f[i], f[(i + 1) % f.size()])}];
+    for (const auto& f : m.faces)
+        for (size_t i = 0; i < f.size(); ++i) {
+            const int a = f[i], b = f[(i + 1) % f.size()];
+            if (count[{std::min(a, b), std::max(a, b)}] != 1) continue;
+            for (int k = 0; k < steps; ++k) out.faces.push_back({at(k, b), at(k, a), at(k + 1, a), at(k + 1, b)});
+        }
+    // A closed shape turned: its own faces at each end too (it sweeps a solid). A surface: its two ends.
+    if (!round)
+        for (const auto& f : m.faces) {
+            std::vector<int> first, last;
+            for (int v : f) first.push_back(at(0, v)), last.push_back(at(steps, v));
+            out.faces.push_back(first);
+            std::reverse(last.begin(), last.end());
+            out.faces.push_back(last);
+        }
+    // Points on the axis come to the same place each step: one point, and faces left with fewer than three gone.
+    mergeByDistance(out, 1e-6f);
+    for (auto& f : out.faces) {
+        f.erase(std::unique(f.begin(), f.end()), f.end());
+        while (f.size() > 1 && f.front() == f.back()) f.pop_back();
+    }
+    std::erase_if(out.faces, [](const std::vector<int>& f) { return f.size() < 3; });
+    removeUnused(out);
+    faceOutward(out);
+    return out;
 }
 
 } // namespace fry

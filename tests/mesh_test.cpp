@@ -365,6 +365,23 @@ int main() {
         CHECK(combine(a, drill, Combine::Subtract) && checkForPrint(a).closed() && checkForPrint(a).volume < 1.0f && checkForPrint(a).volume > 0.85f,
               "a cylinder drilled through a cube: closed, %g m3", checkForPrint(a).volume);
     }
+    // Spin: a square beside the axis turned all the way round is a ring (Pappus: its area times
+    // how far its middle goes); a quarter turn has ends; a screw rises.
+    {
+        const float kPi = 3.14159265f;
+        Mesh sq{{{0.5f, 0, 0}, {1.0f, 0, 0}, {1.0f, 0, 0.5f}, {0.5f, 0, 0.5f}}, {{0, 1, 2, 3}}};
+        const Mesh ring = spin(sq, glm::vec3(0), glm::vec3(0, 0, 1), 360, 96);
+        const float want = 0.25f * 2 * kPi * 0.75f * std::sin(kPi / 96) / (kPi / 96);
+        CHECK(checkForPrint(ring).closed() && std::abs(checkForPrint(ring).volume - want) < want * 2e-3f, "a square spun round: a ring (%.4f m3, want %.4f)", checkForPrint(ring).volume, want);
+        const Mesh quarter = spin(sq, glm::vec3(0), glm::vec3(0, 0, 1), 90, 24);
+        CHECK(checkForPrint(quarter).closed() && checkForPrint(quarter).volume > 0 && std::abs(checkForPrint(quarter).volume - want / 4) < want * 0.01f, "a quarter turn: closed, its ends on (%.4f)", checkForPrint(quarter).volume);
+        const Mesh screw = spin(sq, glm::vec3(0), glm::vec3(0, 0, 1), 720, 96, 2.0f);
+        CHECK(checkForPrint(screw).closed() && std::abs(boundsMax(screw).z - 2.5f) < 1e-4f, "a screw: two turns up 2 m, closed (top %.3f)", boundsMax(screw).z);
+        Mesh tri{{{0, 0, 0}, {0.5f, 0, 0}, {0, 0, 1}}, {{0, 1, 2}}}; // (a side on the axis: a cone)
+        const Mesh cone = spin(tri, glm::vec3(0), glm::vec3(0, 0, 1), 360, 64);
+        const float coneWant = kPi * 0.25f / 3 * std::sin(2 * kPi / 64) / (2 * kPi / 64); // (a 64-sided cone's)
+        CHECK(checkForPrint(cone).closed() && std::abs(checkForPrint(cone).volume - coneWant) < coneWant * 1e-3f, "a triangle on the axis spun: a closed cone (%.4f, want %.4f)", checkForPrint(cone).volume, coneWant);
+    }
     // Text as a shape: letters with holes (O, A, B) come out closed, as tall as asked.
     {
         std::ifstream in(FRY_FONTS_DIR "/InstrumentSans-Bold.ttf", std::ios::binary);

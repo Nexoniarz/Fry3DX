@@ -150,6 +150,11 @@ int mergeFlatFaces(Mesh& m, float angle = 0.5f);
 // Made `thickness` thick: a surface gets a back and walls round its open edges; a closed shape
 // gets an inside (hollow, walls that thick). Negative: the new side outwards instead.
 void thicken(Mesh& m, float thickness);
+// Turned round an axis (through `origin`, along `axis`) by `degrees`, in `steps` pieces, rising
+// `rise` along the axis as it goes (a screw; 0: a plain spin): what it sweeps through. Its open
+// edges (or a flat shape's outline) sweep into the walls; a flat shape is its two ends, when the
+// turn doesn't come back round on itself.
+Mesh spin(const Mesh& m, const glm::vec3& origin, const glm::vec3& axis, float degrees, int steps, float rise = 0.0f);
 // Two shapes (in the same space) made one: `b` added to `a`, taken out of it, or only where they
 // overlap kept. The result goes in `a`; false if nothing's left.
 enum class Combine { Add, Subtract, Overlap };
