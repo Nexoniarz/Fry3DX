@@ -46,12 +46,18 @@ window.FRY = {
   ],
 
   shots: [
-    { img: "img/model.webp", title: "Model", text: "Starter models, a folder of parts, a shape drawn onto a cube's face, rendered with sky and shadows." },
-    { img: "img/paint.webp", title: "Paint", text: "A picture pasted on as a sticker: it bends over the cube's edge like a real one." },
-    { img: "img/print.webp", title: "Print", text: "The printer's plate, sizes in millimetres, checks and overhangs before you slice." },
-    { img: "img/phone.webp", title: "Phone", text: "The phone layout: big buttons along the bottom, panels when you want them, fingers for the view." },
-    { img: "img/combine.webp", title: "Combine", text: "A cylinder taken out of a cube, copies in a row in a folder, a plane made thick." },
-    { img: "img/crash.webp", title: "Even the crash screen", text: "If something does get burnt, your work comes back from the last autosave." },
+    { img: "img/model.webp", title: "Model", text: "Starter models with materials (wood, glossy glass, ceramic), a folder for what's on the table, rendered with sky and shadows while you work." },
+    { img: "img/sculpt.webp", title: "Sculpt", text: "A ball pushed into a head with the brushes: a nose raised, eyes dug in, a smile pinched, ears grabbed out. Tab in the Paint tab." },
+    { img: "img/materials.webp", title: "Materials", text: "Gold, chrome, wood, rubber, copper, ceramic, steel: picked in Properties, shown in the view, exported with the model." },
+    { img: "img/paint.webp", title: "Paint", text: "The logo pasted onto a box as a sticker: drag its corners to fit, Enter to lock it on. The Picture panel shows where it lands." },
+    { img: "img/layout.webp", title: "Layout", text: "The box's surface laid out flat: move, turn and size the frames, and the paint follows." },
+    { img: "img/render.webp", title: "Render", text: "Sun, sky and ground, brightness, soft shadows and glow, and F12 for a picture of just the view." },
+    { img: "img/print.webp", title: "Print", text: "Two gears and an arch on a Prusa's plate: sizes in millimetres, checked to be closed, the arch's overhang flagged, weight and filament." },
+    { img: "img/combine.webp", title: "Combine", text: "A hole taken out of a box, pegs as copies in a folder, a plane made thick: everything stays closed." },
+    { img: "img/scripts.webp", title: "Scripts", text: "A little town from a dozen lines of Lua: random houses, each a folder of walls and roof. F5 runs it, Ctrl+Z takes it back." },
+    { img: "img/light.webp", title: "Light", text: "The light appearance, warm paper instead of graphite. Or let it follow your desktop (View > Appearance)." },
+    { img: "img/phone.webp", title: "Phone", text: "The phone layout: big buttons along the bottom, Shift and Ctrl that stay down, panels when you want them." },
+    { img: "img/crash.webp", title: "Even the crash screen", text: "If something does get burnt, it says so plainly, keeps a report for you, and your work comes back from the last autosave." },
   ],
 
   scripting: {

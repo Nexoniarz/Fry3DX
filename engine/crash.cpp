@@ -2,6 +2,13 @@
 
 #include <core/log.h>
 #include <core/sysinfo.h>
+#include <fs/vfs.h>
+#include <ui/ui.h>
+
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_sdlrenderer3.h>
+#include <stb_image.h>
 
 #include <SDL3/SDL.h>
 
@@ -190,6 +197,9 @@ Busy::~Busy() {
 }
 
 // ── The crash screen: SDL's 2D renderer and its built-in 8×8 font, scaled up ──
+// The crash screen: its own small program (this one, started again), drawn with SDL's own
+// renderer rather than Vulkan or OpenGL (what crashed may have been the graphics driver), in the
+// app's look: the same fonts, colours and keys.
 int runReporter(int argc, char** argv) {
     if (argc < 3 || std::strcmp(argv[1], "-crashreport") != 0) return -1;
     std::string report;
@@ -208,173 +218,200 @@ int runReporter(int argc, char** argv) {
         for (std::string l; std::getline(ss, l);) lines.push_back(l);
     }
     const std::string headline = lines.empty() ? "Fry3DX crashed." : lines[0];
+    std::string details; // (the report without its headline)
+    for (size_t i = 1; i < lines.size(); ++i) details += lines[i] + "\n";
+    while (!details.empty() && details.front() == '\n') details.erase(0, 1);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
     SDL_Window* win = nullptr;
     SDL_Renderer* ren = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Fry3DX - something got burnt", 1000, 620, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY, &win, &ren)) return 1;
+    if (!SDL_CreateWindowAndRenderer("Fry3DX - something got burnt", 940, 640, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY, &win, &ren)) return 1;
     SDL_SetRenderVSync(ren, 1);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    auto text = [&](float x, float y, float scale, const std::string& s, SDL_Color c) {
-        SDL_SetRenderScale(ren, scale, scale);
-        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
-        SDL_RenderDebugText(ren, x / scale, y / scale, s.c_str());
-        SDL_SetRenderScale(ren, 1, 1);
-    };
-    // Shapes for the picture: an ellipse (filled), a box.
-    auto ellipse = [&](float cx, float cy, float rx, float ry, SDL_FColor c) {
-        std::vector<SDL_Vertex> v;
-        const int n = 48;
-        for (int i = 0; i < n; ++i) {
-            const float a0 = 6.2831853f * i / n, a1 = 6.2831853f * (i + 1) / n;
-            v.push_back({{cx, cy}, c, {}});
-            v.push_back({{cx + std::cos(a0) * rx, cy + std::sin(a0) * ry}, c, {}});
-            v.push_back({{cx + std::cos(a1) * rx, cy + std::sin(a1) * ry}, c, {}});
+    const char* base = SDL_GetBasePath();
+    const std::string exeDir = base ? base : "./";
+    fs::mountGameDir(exeDir + "engine"); // (the fonts)
+    fs::mountGameDir(exeDir + "Fry3DX"); // (the logo)
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
+    ImGui_ImplSDLRenderer3_Init(ren);
+    ui::init();
+    const float density = SDL_GetWindowDisplayScale(win);
+    ImGui::GetStyle().ScaleAllSizes(density);
+    ImGui::GetStyle().FontScaleDpi = density;
+
+    SDL_Texture* logo = nullptr;
+    if (auto png = fs::read("branding/logo.png")) {
+        int w = 0, h = 0, n = 0;
+        if (stbi_uc* px = stbi_load_from_memory(png->data(), int(png->size()), &w, &h, &n, 4)) {
+            if ((logo = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h))) {
+                SDL_UpdateTexture(logo, nullptr, px, w * 4);
+                SDL_SetTextureBlendMode(logo, SDL_BLENDMODE_BLEND);
+            }
+            stbi_image_free(px);
         }
-        SDL_RenderGeometry(ren, nullptr, v.data(), int(v.size()), nullptr, 0);
-    };
-    auto quad = [&](SDL_FPoint a, SDL_FPoint b, SDL_FPoint c, SDL_FPoint d, SDL_FColor col) {
-        const SDL_Vertex v[6] = {{a, col, {}}, {b, col, {}}, {c, col, {}}, {a, col, {}}, {c, col, {}}, {d, col, {}}};
-        SDL_RenderGeometry(ren, nullptr, v, 6, nullptr, 0);
-    };
-    auto rgb = [](int r, int g, int b, float a = 1.0f) { return SDL_FColor{r / 255.0f, g / 255.0f, b / 255.0f, a}; };
-    // Word wrap for the 8-pixel font.
-    auto wrap = [](const std::string& s, size_t cols) {
-        std::vector<std::string> out;
-        std::string line;
-        std::stringstream ss(s);
-        for (std::string w; ss >> w;) {
-            if (!line.empty() && line.size() + 1 + w.size() > cols) out.push_back(line), line.clear();
-            line += (line.empty() ? "" : " ") + w;
-        }
-        if (!line.empty()) out.push_back(line);
-        return out;
-    };
-    const SDL_Color ink{236, 232, 226, 255}, dim{150, 146, 140, 255}, orange{255, 140, 60, 255};
-    int scroll = 0, result = 0;
+    }
+
+    using ui::Role;
+    auto col = [](Role r, float a = 1.0f) { return ImGui::ColorConvertU32ToFloat4(ui::color(r, a)); };
     std::string toast;
     double toastUntil = 0;
+    int frame = 0, choice = -1;
     for (bool running = true; running;) {
-        int w = 0, h = 0;
-        SDL_GetRenderOutputSize(ren, &w, &h);
-        const float s = std::min(h / 620.0f, w / 1000.0f);
-        const double t = SDL_GetTicks() / 1000.0;
-        struct Button { const char* label; float x; } buttons[] = {{"OPEN IT AGAIN", 60 * s}, {"COPY REPORT", 290 * s}, {"REPORT ON GITHUB", 520 * s}, {"CLOSE", 750 * s}};
-        const float by = h - 90 * s, bw = 210 * s, bh = 50 * s;
-        float mx = 0, my = 0;
-        SDL_GetMouseState(&mx, &my);
-        float px = 1, py = 1; // window → pixels
-        {
-            int ww, wh;
-            SDL_GetWindowSize(win, &ww, &wh);
-            px = float(w) / ww, py = float(h) / wh;
-        }
-        mx *= px, my *= py;
-        int clicked = -1;
         for (SDL_Event e; SDL_PollEvent(&e);) {
+            ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT) running = false;
-            if (e.type == SDL_EVENT_KEY_DOWN) {
-                if (e.key.key == SDLK_ESCAPE || e.key.key == SDLK_Q) running = false;
-                if (e.key.key == SDLK_R) clicked = 0;
-                if (e.key.key == SDLK_C) clicked = 1;
-            }
-            if (e.type == SDL_EVENT_MOUSE_WHEEL) scroll = std::max(0, scroll - int(e.wheel.y * 3));
-            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT)
-                for (int i = 0; i < 4; ++i)
-                    if (mx >= buttons[i].x && mx < buttons[i].x + bw && my >= by && my < by + bh) clicked = i;
         }
-        if (clicked == 0) { // opened again as it was started (it offers the autosave back)
-            std::vector<char*> a;
-            std::string exe = argv[0];
-            a.push_back(exe.data());
-            for (std::string& r : restart) a.push_back(r.data());
-            a.push_back(nullptr);
-            SDL_DestroyRenderer(ren);
-            SDL_DestroyWindow(win);
-            SDL_Quit();
-#ifdef _WIN32
-            _spawnv(_P_NOWAIT, exe.c_str(), a.data());
-            return 0;
-#else
-            execv(std::filesystem::read_symlink("/proc/self/exe").c_str(), a.data());
-            return 1;
-#endif
-        }
-        if (clicked == 1 || clicked == 2) {
-            SDL_SetClipboardText(report.c_str());
-            toast = clicked == 1 ? "Copied: paste it into a bug report." : "Copied: paste it into the new issue.";
-            toastUntil = t + 3.0;
-            if (clicked == 2) SDL_OpenURL("https://github.com/Nexoniarz/Fry3DX/issues/new");
-        }
-        if (clicked == 3) running = false;
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ui::beginFrame(1080.0f); // (sizes as they are: the window's density is in FontScaleDpi)
+        ImGui::NewFrame();
+        const double t = SDL_GetTicks() / 1000.0;
+        const float u = density; // (one point)
 
-        SDL_SetRenderDrawColor(ren, 22, 22, 25, 255);
-        SDL_RenderClear(ren);
-        // The picture, top right: a pan, a cube on it burnt black, smoke going up.
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->Pos);
+        ImGui::SetNextWindowSize(vp->Size);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, col(Role::Background));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(36 * u, 44 * u));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+        ImGui::Begin("crash", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // The logo, gone dark at the edges, with smoke curling up off it.
+        const float size = 92 * u;
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        if (logo) dl->AddImage(ImTextureRef(ImTextureID(logo)), at, ImVec2(at.x + size, at.y + size));
+        for (int i = 0; i < 7; ++i) {
+            const double life = std::fmod(t * 0.35 + i / 7.0, 1.0);
+            const float x = at.x + size * (0.45f + 0.18f * float(std::sin(life * 5.0 + i * 1.7))), y = at.y + size * 0.3f - float(life) * 52 * u;
+            dl->AddCircleFilled(ImVec2(x, y), (4 + float(life) * 12) * u, ui::color(Role::TextTertiary, 0.28f * float(1.0 - life)), 24);
+        }
+        ImGui::Dummy(ImVec2(size, size));
+        ImGui::SameLine(0, 24 * u);
+        ImGui::BeginGroup();
+        ImGui::Dummy(ImVec2(0, 4 * u));
+        ImGui::PushStyleColor(ImGuiCol_Text, col(Role::AccentText));
+        ImGui::PushFont(ui::font(ui::Font::Bold), 13.0f);
+        ImGui::TextUnformatted("FRY3DX");
+        ImGui::PopFont();
+        ImGui::PopStyleColor();
+        ImGui::PushFont(ui::font(ui::Font::Title), 34.0f);
+        ImGui::TextUnformatted("Something got burnt.");
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, col(Role::TextSecondary));
+        ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x);
+        ImGui::TextUnformatted(headline.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::EndGroup();
+        ImGui::Dummy(ImVec2(0, 14 * u));
+
+        // The good news, on a card of its own.
         {
-            const float cx = w - 230 * s, cy = 170 * s;
-            quad({cx + 80 * s, cy - 6 * s}, {cx + 200 * s, cy - 30 * s}, {cx + 204 * s, cy - 16 * s}, {cx + 84 * s, cy + 8 * s}, rgb(58, 58, 64)); // handle
-            ellipse(cx, cy + 10 * s, 105 * s, 34 * s, rgb(34, 34, 38));
-            ellipse(cx, cy, 105 * s, 34 * s, rgb(70, 70, 78));
-            ellipse(cx, cy + 2 * s, 88 * s, 26 * s, rgb(28, 28, 32));
-            for (int i = 0; i < 3; ++i) { // flames under it
-                const float f = float(std::sin(t * 7 + i * 2.1) * 0.5 + 0.5);
-                const float fx = cx + (i - 1) * 50 * s;
-                ellipse(fx, cy + 46 * s, (14 + 4 * f) * s, (12 + 6 * f) * s, rgb(255, 74, 28, 0.85f));
-                ellipse(fx, cy + 48 * s, 7 * s, (6 + 4 * f) * s, rgb(255, 194, 74, 0.9f));
-            }
-            const float k = 26 * s; // the cube (seen from a corner), charred
-            quad({cx, cy - 2 * k}, {cx + k, cy - 1.5f * k}, {cx, cy - k}, {cx - k, cy - 1.5f * k}, rgb(64, 52, 46));
-            quad({cx - k, cy - 1.5f * k}, {cx, cy - k}, {cx, cy}, {cx - k, cy - 0.5f * k}, rgb(40, 32, 28));
-            quad({cx, cy - k}, {cx + k, cy - 1.5f * k}, {cx + k, cy - 0.5f * k}, {cx, cy}, rgb(26, 21, 19));
-            for (int i = 0; i < 6; ++i) { // smoke, rising and fading
-                const double life = std::fmod(t * 0.45 + i / 6.0, 1.0);
-                const float sx = cx + float(std::sin(life * 6 + i) * 18 * s), sy = cy - 2.2f * k - float(life * 80 * s);
-                ellipse(sx, sy, float(10 + life * 22) * s, float(8 + life * 16) * s, rgb(150, 150, 158, float(0.35 * (1 - life))));
-            }
+            const ImVec2 a = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetTextLineHeight() + 26 * u;
+            dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), ui::color(Role::Success, 0.14f), 8 * u);
+            dl->AddRect(a, ImVec2(a.x + w, a.y + h), ui::color(Role::Success, 0.4f), 8 * u);
+            dl->AddCircleFilled(ImVec2(a.x + 18 * u, a.y + h / 2), 4 * u, ui::color(Role::Success));
+            ImGui::SetCursorScreenPos(ImVec2(a.x + 32 * u, a.y + 13 * u));
+            ImGui::PushStyleColor(ImGuiCol_Text, col(Role::SuccessText));
+            ImGui::TextUnformatted("Your work isn't lost: open it again and Fry3DX offers back the last autosave.");
+            ImGui::PopStyleColor();
+            ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + h + 18 * u));
         }
-        text(60 * s, 60 * s, 4 * s, "Fry3DX", orange);
-        text(60 * s, 110 * s, 2.5f * s, "Something got burnt.", ink);
-        float y = 160 * s;
-        for (const std::string& l : wrap(headline, size_t((w - 400 * s) / (16 * s))))
-            text(60 * s, y, 2 * s, l, ink), y += 24 * s;
-        y += 6 * s;
-        for (const std::string& l : wrap("Your work isn't lost: Open it again and Fry3DX offers back the last autosave.", size_t((w - 400 * s) / (12 * s))))
-            text(60 * s, y, 1.5f * s, l, {130, 210, 120, 255}), y += 18 * s;
-        text(60 * s, y + 4 * s, 1.25f * s, "Report saved to " + std::string(argv[2]), dim);
-        y += 30 * s;
-        // The report's tail, in a panel, scrollable.
-        const SDL_FRect panel{50 * s, y - 8 * s, w - 100 * s, by - 20 * s - (y - 8 * s)};
-        SDL_SetRenderDrawColor(ren, 15, 15, 17, 255);
-        SDL_RenderFillRect(ren, &panel);
-        SDL_SetRenderDrawColor(ren, 255, 120, 40, 255);
-        const SDL_FRect edge{panel.x, panel.y, 3 * s, panel.h};
-        SDL_RenderFillRect(ren, &edge);
-        const int visible = std::max(1, int((panel.h - 10 * s) / (13 * s)));
-        const int start = std::clamp(int(lines.size()) - visible - scroll, 1, std::max(1, int(lines.size()) - 1));
-        for (int i = start; i < int(lines.size()) && y < by - 30 * s; ++i, y += 13 * s)
-            text(64 * s, y, 1.25f * s, lines[size_t(i)].substr(0, size_t((w - 140 * s) / (10 * s))), {165, 160, 152, 255});
-        for (int i = 0; i < 4; ++i) {
-            const bool hover = mx >= buttons[i].x && mx < buttons[i].x + bw && my >= by && my < by + bh;
-            SDL_FRect r{buttons[i].x, by, bw, bh};
-            if (i == 0 || hover) SDL_SetRenderDrawColor(ren, hover ? 255 : 220, hover ? 140 : 100, hover ? 60 : 30, 255);
-            else SDL_SetRenderDrawColor(ren, 46, 46, 52, 255);
-            SDL_RenderFillRect(ren, &r);
-            const float n = float(std::strlen(buttons[i].label)), ts = std::min(1.75f * s, (bw - 24 * s) / (n * 8)); // (fits its button)
-            text(buttons[i].x + (bw - n * 8 * ts) / 2, by + bh / 2 - 4 * ts, ts, buttons[i].label, ink);
+
+        // The report: what was going on when it happened, for a bug report.
+        ImGui::PushStyleColor(ImGuiCol_Text, col(Role::TextTertiary));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::Text("The report, saved to %s", argv[2]);
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        const float buttonsH = ImGui::GetFrameHeight() + 26 * u + ImGui::GetTextLineHeight();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * u, 12 * u));
+        ImGui::BeginChild("report", ImVec2(0, std::max(80 * u, ImGui::GetContentRegionAvail().y - buttonsH)), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::PushFont(ui::font(ui::Font::Mono), 13.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, col(Role::TextSecondary));
+        ImGui::TextUnformatted(details.c_str());
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        if (frame == 1) ImGui::SetScrollHereY(1.0f); // (the newest lines: the end)
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+
+        ImGui::Dummy(ImVec2(0, 10 * u));
+        const ImVec2 button(170 * u, ImGui::GetFrameHeight() + 10 * u);
+        ImGui::PushStyleColor(ImGuiCol_Button, col(Role::Accent));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col(Role::AccentHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, col(Role::AccentActive));
+        ImGui::PushStyleColor(ImGuiCol_Text, col(Role::OnAccent));
+        if (ImGui::Button("Open it again", button)) choice = 0;
+        ImGui::PopStyleColor(4);
+        ImGui::SameLine(0, 10 * u);
+        if (ImGui::Button("Copy the report", button)) choice = 1;
+        ImGui::SameLine(0, 10 * u);
+        if (ImGui::Button("Report it on GitHub", button)) choice = 2;
+        ImGui::SameLine(0, 10 * u);
+        if (ImGui::Button("Close", ImVec2(110 * u, button.y))) running = false;
+        if (!ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) choice = 0;
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) choice = 1;
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Q, false)) running = false;
         }
-        text(60 * s, by + bh + 12 * s, 1.25f * s, "R open again   C copy   Esc close", dim);
-        if (t < toastUntil) text(60 * s, by - 16 * s, 1.5f * s, toast, orange);
-        if (const char* shot = std::getenv("KEEL_CRASHSHOT")) { // for checking the screen: one frame to a file, then quit
+        ImGui::PushStyleColor(ImGuiCol_Text, col(t < toastUntil ? Role::AccentText : Role::TextTertiary));
+        ImGui::TextUnformatted(t < toastUntil ? toast.c_str() : "R open it again    C copy    Esc close");
+        ImGui::PopStyleColor();
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+
+        if (choice == 1 || choice == 2) {
+            SDL_SetClipboardText(report.c_str());
+            toast = choice == 1 ? "Copied: paste it into a bug report." : "Copied: paste it into the new issue.";
+            toastUntil = t + 3.0;
+            if (choice == 2) SDL_OpenURL("https://github.com/Nexoniarz/Fry3DX/issues/new");
+            choice = -1;
+        }
+
+        ImGui::Render();
+        const ImVec4 bg = col(Role::Background);
+        SDL_SetRenderDrawColorFloat(ren, bg.x, bg.y, bg.z, 1.0f);
+        SDL_RenderClear(ren);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
+        if (const char* shot = std::getenv("KEEL_CRASHSHOT"); shot && frame == 4) { // for checking the screen: one frame to a file, then quit
             if (SDL_Surface* px = SDL_RenderReadPixels(ren, nullptr)) SDL_SaveBMP(px, shot), SDL_DestroySurface(px);
             running = false;
         }
         SDL_RenderPresent(ren);
+        ++frame;
+        if (choice == 0) break;
     }
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    if (logo) SDL_DestroyTexture(logo);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    return result;
+    if (choice == 0) { // opened again as it was started (it offers the autosave back)
+        const std::string exe = sys::executablePath();
+        std::vector<char*> a;
+        std::string self = argv[0];
+        a.push_back(self.data());
+        for (std::string& r : restart) a.push_back(r.data());
+        a.push_back(nullptr);
+#ifdef _WIN32
+        _spawnv(_P_NOWAIT, exe.c_str(), a.data());
+        return 0;
+#else
+        execv(exe.c_str(), a.data());
+        return 1;
+#endif
+    }
+    return 0;
 }
 
 } // namespace keel::crash

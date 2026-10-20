@@ -541,6 +541,7 @@ public:
         static keel::Cmd autosaveNow("fry_autosavenow", [](const keel::Args&) { self->autosave(true); }, "Fry3DX: autosave now");
         static keel::Cmd closeAsk("fry_close", [](const keel::Args&) { if (self->allowQuit()) keel::execute("quit"); }, "Fry3DX: as the window's close button");
         static keel::Cmd recover("fry_recover", [](const keel::Args&) { self->findAutosaves(), self->showRecover_ = !self->recover_.empty(); }, "Fry3DX: show the autosaves to recover");
+        static keel::Cmd scriptPanel("fry_scriptpanel", [](const keel::Args& a) { self->showScript_ = a.size() < 2 || a[1] != "0"; }, "Fry3DX: show (1) or hide (0) the Script panel");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         keel::execute("r_autoexposure 0; r_ssr 0; r_volumetric 0; r_shafts 0; r_dynres 0; r_renderscale 1; fps_max 144");
 #if defined(__ANDROID__) // a phone: none of the heavy parts (and its GPU's driver is kept to well-trodden ground)
@@ -5836,6 +5837,16 @@ private:
 
     void paintProperties(float w) {
         Object* o = selected_.empty() ? nullptr : find(active_);
+        if (sculpting_) { // (its look, while you shape it: what it's made of shows how the light runs over it)
+            if (!o) return ImGui::TextWrapped("Brush over an object to sculpt it.\n\nA shape with few points is made finer first, keeping its shape. Tab goes back to painting colours.");
+            ImGui::TextColored(accentText(), "%s", o->name.c_str());
+            ImGui::TextDisabled("%zu points, %zu faces", o->mesh.verts.size(), o->mesh.faces.size());
+            ImGui::SeparatorText("Look");
+            materialPicker(*o);
+            undoable([&] { return ImGui::ColorEdit3("Colour", &o->color.x); });
+            if (ImGui::Checkbox("Smooth shading", &o->smooth)) pushUndo(), touched(o->id);
+            return;
+        }
         if (!o) {
             ImGui::TextWrapped("Click an object to paint on it.\n\nIts surface gets laid out flat on a picture (the Picture panel), which you can paint on too, "
                                "or put pictures onto: copy one in any app and press Ctrl+V.");
@@ -5955,7 +5966,8 @@ private:
                 if (o && ImGui::Button("Lay it out (and start its picture)")) readyToPaint(o->id);
                 return ImGui::End();
             }
-            ImGui::TextWrapped(o ? "Paint on it (or press Start painting it in Properties) and its picture shows here." : "Click an object to paint it: its picture shows here.");
+            ImGui::TextWrapped(sculpting_ ? "Sculpting changes its shape, not its picture. Tab goes back to painting colours."
+                               : o ? "Paint on it (or press Start painting it in Properties) and its picture shows here." : "Click an object to paint it: its picture shows here.");
             return ImGui::End();
         }
         uploadPicture(*o, !paint_.active);
@@ -6303,6 +6315,9 @@ private:
         } else if (tab_ == Tab::Print && printTool_ != PrintTool::None) {
             ImGui::TextDisabled(printTool_ == PrintTool::Measure ? "Measure:  click two points on the model (corners catch the mouse); a third click starts again   ·   M: done"
                                                                  : "Lay flat:  click the face it should stand on: it turns so that face is down, on the bed   ·   L: done");
+        } else if (tab_ == Tab::Paint && sculpting_) {
+            for (const SculptToolInfo& t : kSculptTools)
+                if (t.brush == sculptBrush_) ImGui::TextDisabled("%s:  %s   ·   Shift: smooth   X: both sides   Tab: colour   Right drag: orbit   F1: all keys", t.name, t.hint);
         } else if (tab_ == Tab::Paint) {
             for (const PaintToolInfo& t : kPaintTools)
                 if (t.tool == paintTool_) ImGui::TextDisabled("%s:  %s   ·   Right drag: orbit   Wheel: zoom (in the Picture panel too)   F1: all keys", t.name, t.hint);
