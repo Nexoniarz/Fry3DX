@@ -33,12 +33,16 @@ body { background: var(--nv-color-background); }
 @media (min-width: 64rem) {
   .hero { grid-template-columns: 5fr 7fr; gap: var(--nv-space-12); }
 }
+.hero > * { min-inline-size: 0; } /* (a grid's items may shrink below their content) */
 .hero__copy {
   display: flex;
   flex-direction: column;
   gap: var(--nv-space-5);
   align-items: flex-start;
 }
+.hero__copy > .nv-badge { white-space: normal; max-inline-size: 100%; } /* (the newest version's line wraps on a phone) */
+/* Tab rows wider than a phone scroll sideways instead of widening the page. */
+.nv-nav-tabs { max-inline-size: 100%; overflow-x: auto; scrollbar-width: none; }
 .hero__title { font-size: clamp(var(--nv-font-size-4xl), 5.5vw, var(--nv-font-size-5xl)); }
 .hero__bed { padding: var(--nv-space-6); min-inline-size: 0; }
 .app-window { max-inline-size: 100%; }

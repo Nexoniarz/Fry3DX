@@ -7,7 +7,7 @@ window.FRY = {
   authorUrl: "https://github.com/Nexoniarz",
   repo: "https://github.com/Nexoniarz/Fry3DX",
   tagline: "A 3D modeller that does what you'd expect.",
-  intro: "Pick a tool, click, drag. Plain words instead of jargon, a toolbox like GIMP's, and the useful stuff from the big modellers without the hundred menus around it. On Windows, Linux and your phone.",
+  intro: "Pick a tool, click, drag. Plain words instead of jargon, a toolbox like GIMP's, and the useful stuff from the big modellers without the hundred menus around it. On Windows, macOS, Linux and your phone.",
   releases: "https://github.com/Nexoniarz/Fry3DX/releases/latest",
 
   why: {
@@ -21,7 +21,7 @@ window.FRY = {
   // The feature tabs, in order (each feature names its group).
   featureGroups: [
     { id: "make", title: "Make" },
-    { id: "paint", title: "Paint" },
+    { id: "paint", title: "Paint & sculpt" },
     { id: "print", title: "Render & print" },
     { id: "work", title: "Work" },
   ],
@@ -33,6 +33,8 @@ window.FRY = {
     { group: "make", icon: "points", title: "Real shape editing", text: "Points, edges and faces. Extrude, inset, round edges, loop cut, knife, merge. Shift+click picks a whole loop, Shift+Ctrl+click a ring." },
     { group: "make", icon: "hole", title: "Holes for screws and nuts", text: "Round, rectangle, triangle or hexagon. M2 to M8 screw and nut sizes ready, with a little room added so the print actually fits." },
     { group: "make", icon: "copies", title: "Copies and thickness", text: "Copies in a row or round in a circle. Make a surface thick, or a solid hollow with walls exactly as thick as you need." },
+    { group: "paint", icon: "sculpt", title: "Sculpt it like clay", text: "Raise, puff out, smooth, flatten, pinch and grab the surface with a brush, the same on both sides if you like. A shape with too few points is made finer first, keeping its shape." },
+    { group: "print", icon: "sphere", title: "Materials you can see", text: "Gold, chrome, brushed steel, wood, ceramic, rubber and more, or set how metal and rough it is yourself. Shown in the view, not only in the render, and exported with it." },
     { group: "paint", icon: "brush", title: "Paint and stickers", text: "Paint on the model or on its flat picture. Paste any picture (Ctrl+V) and it goes on like a sticker that bends over edges and corners." },
     { group: "paint", icon: "layout", title: "Layout tab", text: "Move, turn and size the flat frames of the surface by hand. The paint follows, so the model looks the same." },
     { group: "print", icon: "print", title: "Made for 3D printing", text: "Your printer's plate in the view, sizes in millimetres, checks for holes and flipped faces with fix buttons, overhangs shown red, weight and filament." },
@@ -96,6 +98,7 @@ fry.frame()`,
 
   downloads: [
     { os: "Windows", what: "10 and 11, 64-bit", file: "windows-x64.zip", how: "Unpack it, run fry3dx.exe." },
+    { os: "macOS", what: "13.3 and newer, Apple silicon and Intel", file: "macos.zip", how: "Unzip it, open Fry3DX.app. The first time: right-click it and choose Open." },
     { os: "Linux", what: "any distro from 2022 on, 64-bit", file: "linux-x64.AppImage", how: "Make it executable, run it. A .tar.gz is there too." },
     { os: "Android", what: "8.0 and newer, 64-bit, Vulkan", file: "android-arm64.apk", how: "Open it on the phone to install (allow installing from your browser or files app)." },
   ],
@@ -108,10 +111,11 @@ fry.frame()`,
       "cmake --preset release && cmake --build build/release",
       "build/release/bin/fry3dx",
     ],
-    needs: "Needs: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+) and glslc. Presets for Windows (cross-built) and Android are in the README.",
+    needs: "Needs: CMake 3.25+, Ninja, a C++20 compiler (GCC 13+, Clang 17+, Xcode 15+) and glslc. Presets for macOS, Windows (cross-built) and Android are in the README.",
   },
 
   versions: [
+    { v: "0.6", date: "2026-10-20", items: ["Sculpting, scripts and a Mac app", "Sculpting: raise, puff out, smooth, flatten, pinch and grab", "Materials shown in the view, sixteen to start from", "Scripts: Lua and a Script panel, with examples", "macOS: one app for Apple silicon and Intel", "A new look (Niveus): light and dark, following the desktop", "A new logo", "Drop a file on the window to open it"] },
     { v: "0.5", date: "2026-10-19", items: ["Builds for Windows, Linux (AppImage) and Android", "A phone layout: big buttons, finger gestures, the phone's file picker", "Apache License 2.0"] },
     { v: "0.4", date: "2026-10-19", items: ["Combine objects: add, subtract, overlap", "Draw shapes onto other objects", "Copies in a row or circle, thicken and hollow", "FBX export", "Folders and groups in Layers, go-to buttons", "Shift scales both sides, Shift+click loops and rings", "A crash screen of its own"] },
     { v: "0.3", date: "2026-10-19", items: ["Stickers that bend over edges, picture layers", "Packed .fry files, autosave and recovery", "Layout tab, Print tab, 3MF / STL / OBJ / PLY / GLB export", "Hole tool: hexagon nut pockets, rectangles, outlines"] },
