@@ -426,6 +426,24 @@ int main() {
     const std::string text((std::istreambuf_iterator<char>(j)), {});
     CHECK(text.find("\"translation\":[2,3,1]") != std::string::npos, "in glTF's axes (Y up): the position is [2,3,1]");
 
+    { // A gear with a screw hole (scripts/gear.lua): cutting leaves points a hair apart and
+      // needles along edges; what comes out must still print (closed, nothing without size).
+        for (int teeth : {10, 16})
+            for (int sides : {24, 32}) {
+                std::vector<glm::vec3> o;
+                const float radius = teeth == 16 ? 0.03f : 0.018f;
+                for (int i = 0; i < teeth * 4; ++i) {
+                    const float a = float(i) / float(teeth * 4) * 6.2831853f, r = i % 4 < 2 ? radius + 0.004f : radius;
+                    o.push_back({std::cos(a) * r, std::sin(a) * r, 0});
+                }
+                Mesh g = extrudeOutline(o, {0, 0, 1}, 0.008f);
+                transform(g, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0.004f)));
+                combine(g, makeCylinder(sides, 0.0027f, 0.03f), Combine::Subtract);
+                const PrintCheck c = checkForPrint(g);
+                CHECK(c.closed() && c.tinyFaces == 0 && closed(g), "a %d-tooth gear minus a %d-sided hole prints (open %d, crowded %d, flipped %d, tiny %d)", teeth, sides,
+                      c.openEdges, c.crowdedEdges, c.flippedEdges, c.tinyFaces);
+            }
+    }
     { // Sculpting: a cube made finer keeps its shape; brushes move only what's under them.
         Mesh m = makeCube(1.0f);
         const int times = finerForSculpting(m, 2000);

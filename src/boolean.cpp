@@ -143,7 +143,14 @@ Mesh meshOf(const std::vector<Poly>& polys) {
             if (f.empty() || f.back() != i) f.push_back(i);
         }
         while (f.size() > 1 && f.front() == f.back()) f.pop_back();
-        if (f.size() >= 3) m.faces.push_back(f);
+        if (f.size() < 3) continue;
+        // A sliver squashed flat by the sharing of points (all its corners on one line): it
+        // would be a third face on an edge. Left out; its middle points are set into the
+        // neighbours' edges below, so it stays closed all round.
+        glm::vec3 area(0.0f);
+        for (size_t i = 0; i < f.size(); ++i) area += glm::cross(m.verts[size_t(f[i])], m.verts[size_t(f[(i + 1) % f.size()])]);
+        if (glm::length(area) < 2e-11f) continue; // (twice the area: about a square of 3 µm)
+        m.faces.push_back(f);
     }
     // T-junctions: a point in the middle of an edge it isn't a corner of.
     std::vector<int> order(m.verts.size());
@@ -175,6 +182,30 @@ Mesh meshOf(const std::vector<Poly>& polys) {
     return m;
 }
 
+// Faces that run out to a point and straight back (… a b a …): a needle along an edge, which
+// would put a third face on it. The needle goes; the face is the same without it.
+void removeSpikes(Mesh& m) {
+    for (auto& f : m.faces)
+        for (bool again = true; again && f.size() >= 3;) {
+            again = false;
+            for (size_t i = 0; i < f.size() && f.size() >= 3; ++i) {
+                const size_t n = f.size(), next = (i + 1) % n, after = (i + 2) % n;
+                if (f[i] == f[next]) { // (a point twice in a row)
+                    f.erase(f.begin() + long(next));
+                    again = true;
+                    break;
+                }
+                if (f[i] == f[after]) { // a b a: b, and one a, go
+                    const size_t lo = std::min(next, after), hi = std::max(next, after);
+                    f.erase(f.begin() + long(hi)), f.erase(f.begin() + long(lo));
+                    again = true;
+                    break;
+                }
+            }
+        }
+    std::erase_if(m.faces, [](const std::vector<int>& f) { return f.size() < 3; });
+}
+
 } // namespace
 
 bool combine(Mesh& a, const Mesh& b, Combine op) {
@@ -200,7 +231,12 @@ bool combine(Mesh& a, const Mesh& b, Combine op) {
     std::vector<Poly> out;
     A.all(out);
     a = meshOf(out);
+    // Points the cutting left a hair apart (closer than 0.03 mm: nothing a printer or a model
+    // could show) are one; else they fold tiny faces back over their neighbours.
+    mergeByDistance(a, 3e-5f);
+    removeSpikes(a);
     mergeFlatFaces(a);
+    removeSpikes(a);
     return !a.faces.empty();
 }
 
