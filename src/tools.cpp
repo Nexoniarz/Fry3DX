@@ -488,4 +488,57 @@ std::set<std::pair<int, int>> edgeRing(const Mesh& m, std::pair<int, int> edge) 
     return out;
 }
 
+void smoothPoints(Mesh& m, const std::set<int>& verts, float amount, int times) {
+    std::vector<std::vector<int>> next(m.verts.size());
+    for (const auto& [a, b] : edges(m)) next[size_t(a)].push_back(b), next[size_t(b)].push_back(a);
+    for (int t = 0; t < times; ++t) {
+        std::vector<std::pair<int, glm::vec3>> moved; // (from where they all were before this pass)
+        for (int v : verts) {
+            if (v < 0 || size_t(v) >= m.verts.size() || next[size_t(v)].empty()) continue;
+            glm::vec3 mid(0.0f);
+            for (int n : next[size_t(v)]) mid += m.verts[size_t(n)];
+            mid /= float(next[size_t(v)].size());
+            moved.push_back({v, glm::mix(m.verts[size_t(v)], mid, std::clamp(amount, 0.0f, 1.0f))});
+        }
+        for (const auto& [v, p] : moved) m.verts[size_t(v)] = p;
+    }
+}
+
+void pushPoints(Mesh& m, const std::set<int>& verts, float distance) {
+    std::vector<glm::vec3> normal(m.verts.size(), glm::vec3(0.0f));
+    for (size_t f = 0; f < m.faces.size(); ++f) {
+        const glm::vec3 n = faceNormal(m, int(f)) * faceArea(m, int(f));
+        for (int v : m.faces[f]) normal[size_t(v)] += n;
+    }
+    for (int v : verts)
+        if (v >= 0 && size_t(v) < m.verts.size() && glm::length(normal[size_t(v)]) > 1e-20f) m.verts[size_t(v)] += glm::normalize(normal[size_t(v)]) * distance;
+}
+
+std::vector<int> bridgeFaces(Mesh& m, int a, int b) {
+    if (a == b || a < 0 || b < 0 || size_t(a) >= m.faces.size() || size_t(b) >= m.faces.size()) return {};
+    const std::vector<int> A = m.faces[size_t(a)];
+    std::vector<int> B = m.faces[size_t(b)];
+    const size_t n = A.size();
+    if (B.size() != n || n < 3) return {};
+    for (int v : A)
+        if (std::find(B.begin(), B.end(), v) != B.end()) return {}; // (sharing a point: nothing to bridge)
+    // B the other way round (seen down the tunnel, the same way as A), turned to fit A best.
+    std::reverse(B.begin(), B.end());
+    size_t shift = 0;
+    float best = INFINITY;
+    for (size_t s = 0; s < n; ++s) {
+        float d = 0.0f;
+        for (size_t i = 0; i < n; ++i) d += glm::distance(m.verts[size_t(A[i])], m.verts[size_t(B[(i + s) % n])]);
+        if (d < best) best = d, shift = s;
+    }
+    m.faces.erase(m.faces.begin() + std::max(a, b)), m.faces.erase(m.faces.begin() + std::min(a, b));
+    std::vector<int> made;
+    for (size_t i = 0; i < n; ++i) {
+        // Along A's edge the way A went (it takes A's place there; A's neighbour runs it the other way).
+        made.push_back(int(m.faces.size()));
+        m.faces.push_back({A[i], A[(i + 1) % n], B[(i + 1 + shift) % n], B[(i + shift) % n]});
+    }
+    return made;
+}
+
 } // namespace fry

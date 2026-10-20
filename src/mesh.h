@@ -131,6 +131,17 @@ std::set<int> linkedVerts(const Mesh& m, const std::set<int>& verts);
 // The points next to these (by an edge), and these.
 std::set<int> growVerts(const Mesh& m, const std::set<int>& verts);
 
+// Points moved towards their neighbours' middle (`amount` 0..1, a few times for more): bumps
+// evened out (Blender's Smooth Vertices, Maya's Average Vertices).
+void smoothPoints(Mesh& m, const std::set<int>& verts, float amount = 0.5f, int times = 1);
+// Points pushed out along the surface's normal there (negative: pulled in): fatter or thinner,
+// keeping the shape (Blender's Shrink/Fatten).
+void pushPoints(Mesh& m, const std::set<int>& verts, float distance);
+// Two faces with as many corners each taken out and joined by a tunnel of faces between their
+// edges, each corner to the nearest one round (Bridge, as in Blender and Maya). The new faces;
+// empty (and nothing changed) if they aren't two faces with as many corners.
+std::vector<int> bridgeFaces(Mesh& m, int a, int b);
+
 // ── Whole shapes ──
 
 // Faces next to each other lying flat together (normals within `angle` degrees) joined into

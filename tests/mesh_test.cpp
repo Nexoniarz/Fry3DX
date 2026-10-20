@@ -433,6 +433,37 @@ int main() {
     const std::string text((std::istreambuf_iterator<char>(j)), {});
     CHECK(text.find("\"translation\":[2,3,1]") != std::string::npos, "in glTF's axes (Y up): the position is [2,3,1]");
 
+    { // Bridge: two boxes' facing sides joined by a tunnel; one closed shape, every face outwards.
+        Mesh two = makeCube();
+        append(two, makeCube(), glm::translate(glm::mat4(1.0f), glm::vec3(3, 0.2f, 0)));
+        int fa = -1, fb = -1;
+        for (size_t f = 0; f < two.faces.size(); ++f) {
+            const glm::vec3 n = faceNormal(two, int(f)), c = faceCenter(two, int(f));
+            if (n.x > 0.9f && c.x < 1.0f) fa = int(f);
+            if (n.x < -0.9f && c.x > 2.0f) fb = int(f);
+        }
+        const std::vector<int> made = bridgeFaces(two, fa, fb);
+        const PrintCheck c = checkForPrint(two);
+        CHECK(made.size() == 4 && c.closed() && c.volume > 2.0f + 2.0f * 0.95f && c.pieces == 1, "bridge: one closed shape (volume %.2f, pieces %d, open %d crowded %d flipped %d)", c.volume, c.pieces, c.openEdges, c.crowdedEdges, c.flippedEdges);
+        Mesh tri = makeCube();
+        append(tri, makeCylinder(3, 0.5f, 1.0f), glm::translate(glm::mat4(1.0f), glm::vec3(3, 0, 0)));
+        CHECK(bridgeFaces(tri, 0, int(tri.faces.size()) - 1).empty() && tri.faces.size() == 6 + 5, "bridge: not between a 4 and a 3 cornered face");
+    }
+    { // Smoothing points evens a bump; pushing a cube's points out makes it bigger all round.
+        Mesh p = makePlane(2.0f);
+        for (int i = 0; i < 3; ++i) subdivide(p, false);
+        int mid = 0;
+        for (size_t v = 0; v < p.verts.size(); ++v)
+            if (glm::length(glm::vec2(p.verts[v])) < glm::length(glm::vec2(p.verts[size_t(mid)]))) mid = int(v);
+        p.verts[size_t(mid)].z = 1.0f;
+        smoothPoints(p, {mid}, 1.0f);
+        CHECK(std::abs(p.verts[size_t(mid)].z) < 1e-5f, "smooth: the bump's point back to its neighbours' middle");
+        Mesh c = makeCube();
+        std::set<int> all;
+        for (size_t v = 0; v < c.verts.size(); ++v) all.insert(int(v));
+        pushPoints(c, all, 0.1f);
+        CHECK(std::abs(boundsMax(c).x - (0.5f + 0.1f / std::sqrt(3.0f))) < 1e-4f && checkForPrint(c).volume > 1.0f, "push: corners out along their normals");
+    }
     { // A gear with a screw hole (scripts/gear.lua): cutting leaves points a hair apart and
       // needles along edges; what comes out must still print (closed, nothing without size).
         for (int teeth : {10, 16})

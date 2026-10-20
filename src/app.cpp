@@ -347,8 +347,11 @@ public:
             self->enterEdit();
             if (a.size() > 1) self->elem_ = a[1] == "vertex" ? Elem::Vertex : a[1] == "edge" ? Elem::Edge : Elem::Face;
             if (a.size() > 2 && a[2] == "all") self->selectAllElements();
-            if (a.size() > 2 && a[2] != "all") self->selFaces_ = {std::stoi(a[2])};
-        }, "Fry3DX: fry_edit [vertex|edge|face] [all|face number]");
+            if (a.size() > 2 && a[2] != "all") {
+                self->selFaces_.clear();
+                for (size_t i = 2; i < a.size(); ++i) self->selFaces_.insert(std::stoi(a[i]));
+            }
+        }, "Fry3DX: fry_edit [vertex|edge|face] [all|face numbers...]");
         static keel::Cmd tool("fry_tool", [](const keel::Args& a) {
             for (const ToolInfo& t : kTools)
                 if (a.size() > 1 && SDL_strcasecmp(a[1].c_str(), t.name) == 0) self->setTool(t.tool);
@@ -549,6 +552,32 @@ public:
         static keel::Cmd closeAsk("fry_close", [](const keel::Args&) { if (self->allowQuit()) keel::execute("quit"); }, "Fry3DX: as the window's close button");
         static keel::Cmd recover("fry_recover", [](const keel::Args&) { self->findAutosaves(), self->showRecover_ = !self->recover_.empty(); }, "Fry3DX: show the autosaves to recover");
         static keel::Cmd scriptPanel("fry_scriptpanel", [](const keel::Args& a) { self->showScript_ = a.size() < 2 || a[1] != "0"; }, "Fry3DX: show (1) or hide (0) the Script panel");
+        static keel::Cmd shapeOp("fry_shapeop", [](const keel::Args& a) {
+            if (a.size() < 2) return;
+            if (a[1] == "smooth") self->smoothPointsNow();
+            else if (a[1] == "bridge") self->bridgeNow();
+            else if (a[1] == "push" && a.size() > 2) {
+                self->startPush();
+                if (Object* o = self->find(self->pushObject_); o && self->showPush_) {
+                    self->pushBy_ = std::stof(a[2]);
+                    pushPoints(o->mesh, self->pushPts_, self->pushBy_);
+                    self->changedShape(*o, true);
+                    self->showPush_ = false;
+                }
+            } else if (a[1] == "move" && a.size() > 4) { // the selection (and with soft selection, what's near) moved, world metres
+                Object* o = self->editing();
+                if (!o) return;
+                self->pushUndo();
+                self->drag_.soft.clear();
+                if (self->softSel_) self->findSoft();
+                const glm::mat4 m = objectMatrix(*o);
+                const glm::mat4 local = glm::inverse(m) * glm::translate(glm::mat4(1.0f), glm::vec3(std::stof(a[2]), std::stof(a[3]), std::stof(a[4]))) * m;
+                for (int v : self->selectedPoints()) o->mesh.verts[size_t(v)] = glm::vec3(local * glm::vec4(o->mesh.verts[size_t(v)], 1.0f));
+                for (const auto& [v, w] : self->drag_.soft) o->mesh.verts[size_t(v)] = glm::mix(o->mesh.verts[size_t(v)], glm::vec3(local * glm::vec4(o->mesh.verts[size_t(v)], 1.0f)), w);
+                self->drag_.soft.clear();
+                self->changedShape(*o, true);
+            } else if (a[1] == "soft") self->softSel_ = a.size() < 3 || a[2] != "0", self->softReach_ = a.size() > 3 ? std::stof(a[3]) : self->softReach_;
+        }, "Fry3DX: shape editing: fry_shapeop smooth | bridge | push metres | soft 1 [reach] | move x y z");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
             if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
@@ -629,6 +658,7 @@ public:
         commandForm();
         copiesWindow();
         thickenWindow();
+        pushWindow();
         saveQuestion();
         recoverWindow();
         if (!askSave_ && !showRecover_) shortcuts(io);
@@ -708,7 +738,18 @@ private:
         glm::vec3 startHit{0.0f};
         Scene before;
         std::set<std::pair<int, int>> bevelEdges;
+        std::vector<std::pair<int, float>> soft; // points near the selection that follow it, and how much
     } drag_;
+    // Soft selection (shape editing): points within `softReach_` of the selection follow it, less
+    // the further they are (Blender's proportional editing, Maya's soft select).
+    bool softSel_ = false;
+    float softReach_ = 0.3f;
+    // Push out / pull in (Alt+S): the points and the shape as it was when it started.
+    bool showPush_ = false;
+    float pushBy_ = 0.0f;
+    std::set<int> pushPts_;
+    Mesh pushFrom_;
+    uint32_t pushObject_ = 0;
     bool boxing_ = false, painting_ = false, lassoing_ = false, tapDraw_ = false;
     ImVec2 boxStart_{0, 0};
     std::vector<ImVec2> lasso_;
@@ -1681,6 +1722,59 @@ private:
         pushUndo();
         mergeToCenter(o->mesh, pts);
         changedShape(*o);
+    }
+    void smoothPointsNow() {
+        Object* o = editing();
+        const std::set<int> pts = selectedPoints();
+        if (!o || pts.empty()) return say("Select points (or faces, edges) to smooth");
+        pushUndo();
+        smoothPoints(o->mesh, pts, 0.5f, 2);
+        changedShape(*o, true);
+        say("Smoothed (again for more)");
+    }
+    void startPush() {
+        Object* o = editing();
+        if (!o || selectedPoints().empty()) return say("Select points (or faces) to push out or pull in");
+        pushUndo();
+        pushPts_ = selectedPoints(), pushFrom_ = o->mesh, pushObject_ = o->id, pushBy_ = 0.0f, showPush_ = true;
+    }
+    void pushWindow() {
+        if (!showPush_) return;
+        Object* o = find(pushObject_);
+        if (!o || mode_ != Mode::Edit) return void(showPush_ = false);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        bool open = true;
+        if (!ImGui::Begin("Push out, pull in", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) return ImGui::End();
+        const float w = 260;
+        float mm = pushBy_ * 1000;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        if (ImGui::DragFloat("##by", &mm, 0.5f, -1e5f, 1e5f, "%.1f mm (- pulls in)")) {
+            pushBy_ = mm / 1000;
+            o->mesh = pushFrom_;
+            pushPoints(o->mesh, pushPts_, pushBy_);
+            changedShape(*o, true);
+        }
+        ImGui::TextWrapped("Each point along the surface's normal there: fatter or thinner, the same shape.");
+        pushAccent();
+        const bool done = ImGui::Button("Done", ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+        popAccent();
+        ImGui::End();
+        if (done) showPush_ = false;
+        if (!open) o->mesh = pushFrom_, changedShape(*o, true), showPush_ = false; // (closed: as it was)
+    }
+    void bridgeNow() {
+        Object* o = editing();
+        if (!o || selFaces_.size() != 2) return say("Select two faces to bridge (Faces, 3; Join two objects first if they're apart)");
+        const int a = *selFaces_.begin(), b = *selFaces_.rbegin();
+        if (o->mesh.faces[size_t(a)].size() != o->mesh.faces[size_t(b)].size())
+            return say(std::format("Those faces have {} and {} corners: bridging needs as many on each", o->mesh.faces[size_t(a)].size(), o->mesh.faces[size_t(b)].size()));
+        pushUndo();
+        const std::vector<int> made = bridgeFaces(o->mesh, a, b);
+        if (made.empty()) return undo(), redo_.clear(), say("Couldn't bridge those (they share a point)");
+        changedShape(*o);
+        selFaces_.insert(made.begin(), made.end());
+        say(std::format("Bridged: {} faces between them", made.size()));
     }
     void flipNow() {
         Object* o = editing();
@@ -3662,7 +3756,11 @@ private:
         const ImVec2 d = io.MouseDelta;
         if (orbiting_ && (d.x != 0 || d.y != 0)) orbitBy(d);
         if (panning_ && (d.x != 0 || d.y != 0)) panBy(d);
-        if (inView && io.MouseWheel != 0) {
+        if (inView && io.MouseWheel != 0 && drag_.active && softSel_ && mode_ == Mode::Edit) { // the soft selection's reach, not zoom
+            softReach_ = std::clamp(softReach_ * std::pow(1.15f, io.MouseWheel), 0.001f, 1000.0f);
+            findSoft();
+            message_ = std::format("Soft selection reaches {:.3f} m (wheel)", softReach_), messageAt_ = now();
+        } else if (inView && io.MouseWheel != 0) {
             // Towards what's under the mouse: the target slides that way a little.
             const float k = std::pow(0.85f, io.MouseWheel);
             const Ray ray = mouseRay(io.MousePos);
@@ -4110,6 +4208,7 @@ private:
         drag_.startMouse = io.MousePos;
         drag_.before = scene_;
         pushUndo();
+        if (softSel_ && (tool_ == Tool::Move || tool_ == Tool::Rotate || tool_ == Tool::Scale)) findSoft();
         const Ray ray = mouseRay(io.MousePos);
         if (tool_ == Tool::Extrude || tool_ == Tool::Inset) {
             glm::vec3 at, n;
@@ -4148,6 +4247,36 @@ private:
         drag_.pivot = tool_ == Tool::Rotate ? rotatePivot(a) : selectionMiddle(a);
         if (handle < 3) drag_.startT = closestOnAxis(ray, drag_.pivot, a[size_t(handle)]);
         if (auto hit = hitPlane(ray, drag_.pivot, -viewDir())) drag_.startHit = *hit;
+    }
+    // The points within reach of the selection (in the world: the object's size counts), each with
+    // how much it follows: a grid of the selected points, so a big mesh stays quick.
+    void findSoft() {
+        drag_.soft.clear();
+        const Object* o = editing();
+        if (!o) return;
+        const std::set<int> pts = selectedPoints();
+        if (pts.empty()) return;
+        const glm::mat4 m = objectMatrix(*o);
+        const float r = std::max(softReach_, 1e-5f);
+        auto cell = [&](const glm::vec3& p) { return glm::ivec3(glm::floor(p / r)); };
+        auto keyOf = [](glm::ivec3 c) { return (int64_t(c.x & 0x1FFFFF) << 42) | (int64_t(c.y & 0x1FFFFF) << 21) | int64_t(c.z & 0x1FFFFF); };
+        std::unordered_map<int64_t, std::vector<glm::vec3>> grid;
+        for (int v : pts) {
+            const glm::vec3 w(m * glm::vec4(o->mesh.verts[size_t(v)], 1.0f));
+            grid[keyOf(cell(w))].push_back(w);
+        }
+        for (size_t v = 0; v < o->mesh.verts.size(); ++v) {
+            if (pts.count(int(v))) continue;
+            const glm::vec3 w(m * glm::vec4(o->mesh.verts[v], 1.0f));
+            const glm::ivec3 c = cell(w);
+            float best = r;
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dz = -1; dz <= 1; ++dz)
+                        if (auto it = grid.find(keyOf(c + glm::ivec3(dx, dy, dz))); it != grid.end())
+                            for (const glm::vec3& q : it->second) best = std::min(best, glm::distance(w, q));
+            if (best < r) drag_.soft.push_back({int(v), sculptFalloff(best, r)});
+        }
     }
     void cancelDrag() {
         if (!drag_.active) return;
@@ -4249,6 +4378,10 @@ private:
         if (Object* o = editing()) {
             const glm::mat4 m = objectMatrix(*o), local = glm::inverse(m) * T * m;
             for (int v : selectedPoints()) o->mesh.verts[size_t(v)] = glm::vec3(local * glm::vec4(o->mesh.verts[size_t(v)], 1.0f));
+            for (const auto& [v, w] : drag_.soft) { // (part of the way, by how near)
+                glm::vec3& p = o->mesh.verts[size_t(v)];
+                p = glm::mix(p, glm::vec3(local * glm::vec4(p, 1.0f)), w);
+            }
             handMade(*o);
             touched(o->id);
             return;
@@ -4628,6 +4761,7 @@ private:
             return;
         }
         if (alt) {
+            if (key(ImGuiKey_S) && mode_ == Mode::Edit) startPush();
             if (key(ImGuiKey_A)) selectNone();
             if (key(ImGuiKey_Z)) xray_ = !xray_;
             if (key(ImGuiKey_H))
@@ -4646,7 +4780,7 @@ private:
         if (key(ImGuiKey_B)) setTool(Tool::Bevel);
         if (key(ImGuiKey_C)) setTool(Tool::LoopCut);
         if (key(ImGuiKey_K)) setTool(Tool::Knife);
-        if (key(ImGuiKey_O)) setTool(Tool::Hole);
+        if (key(ImGuiKey_O) && !shift) setTool(Tool::Hole);
         if (key(ImGuiKey_Tab)) mode_ == Mode::Edit ? leaveEdit() : enterEdit();
         if (key(ImGuiKey_Delete) || key(ImGuiKey_Backspace)) deleteSelected();
         if (key(ImGuiKey_F)) frameSelected();
@@ -4668,9 +4802,12 @@ private:
             if (key(ImGuiKey_2)) elem_ = Elem::Edge, clearElements();
             if (key(ImGuiKey_3)) elem_ = Elem::Face, clearElements();
         }
-        if (key(ImGuiKey_H))
+        if (key(ImGuiKey_H) && shift && !selected_.empty()) showOnly(selected_); // (the rest hidden)
+        else if (key(ImGuiKey_H))
             for (Object& o : scene_.objects)
                 if (selected_.count(o.id) && mode_ == Mode::Object) o.visible = false;
+        if ((key(ImGuiKey_Slash) || key(ImGuiKey_KeypadDivide)) && mode_ == Mode::Object && !selected_.empty()) showOnly(selected_);
+        if (key(ImGuiKey_O) && shift) softSel_ = !softSel_, say(softSel_ ? "Soft selection on: points near follow (the wheel while dragging: how far)" : "Soft selection off");
         if (key(ImGuiKey_Keypad1)) setView(shift ? View::Back : View::Front);
         if (key(ImGuiKey_Keypad3)) setView(shift ? View::Right : View::Left);
         if (key(ImGuiKey_Keypad7)) setView(shift ? View::Bottom : View::Top);
@@ -5062,6 +5199,11 @@ private:
 
     void gizmo(ImDrawList* dl, const ImGuiIO& io) {
         const int hot = mouseInView(io) || drag_.active ? hoverHandle(io.MousePos) : -1;
+        if (softSel_ && mode_ == Mode::Edit && (tool_ == Tool::Move || tool_ == Tool::Rotate || tool_ == Tool::Scale) && !selectedPoints().empty()) {
+            const glm::vec3 at = drag_.active ? drag_.pivot : pivotOfSelection();
+            ImVec2 c;
+            if (project(at, c)) dl->AddCircle(c, softReach_ / std::max(pixelSize(at), 1e-9f), keel::ui::accent(0.8f), 64, 1.5f);
+        }
         if (tool_ == Tool::Extrude || tool_ == Tool::Inset) {
             glm::vec3 at, n;
             if (!faceHandle(at, n)) return;
@@ -5290,6 +5432,11 @@ private:
             if (ImGui::MenuItem("Merge points", "M")) mergeNow();
             if (ImGui::MenuItem("Make a face")) makeFaceNow();
             if (ImGui::MenuItem("Flip faces")) flipNow();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Smooth points")) smoothPointsNow();
+            if (ImGui::MenuItem("Push out / pull in...", "Alt+S")) startPush();
+            if (ImGui::MenuItem("Bridge two faces")) bridgeNow();
+            ImGui::MenuItem("Soft selection", "Shift+O", &softSel_);
             if (ImGui::MenuItem("Make into its own object", "P")) separateSelected();
             if (ImGui::MenuItem("Delete", "Del")) deleteElements();
             ImGui::EndDisabled();
@@ -5319,6 +5466,7 @@ private:
             ImGui::Separator();
             if (ImGui::MenuItem("Frame selected", "F")) frameSelected();
             if (ImGui::MenuItem("Frame everything", "Home")) frameAll();
+            if (ImGui::MenuItem("Show only the selected (again: all)", "/", false, !selected_.empty())) showOnly(selected_);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Script")) {
@@ -5652,6 +5800,15 @@ private:
         }
     }
 
+    void softChoice(float w) {
+        if (mode_ != Mode::Edit) return;
+        ImGui::Checkbox("Soft selection (Shift+O)", &softSel_);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Points near the selection follow it, less the further they are");
+        if (!softSel_) return;
+        ImGui::SetNextItemWidth(w);
+        ImGui::DragFloat("##reach", &softReach_, 0.002f, 0.001f, 1000.0f, "reaches %.3f m");
+        ImGui::TextDisabled("(the wheel while dragging too)");
+    }
     void toolOptions() {
         ImGui::Begin("Tool options", nullptr, ImGuiWindowFlags_NoCollapse);
         const float w = ImGui::GetContentRegionAvail().x;
@@ -5708,6 +5865,7 @@ private:
         case Tool::Move:
             orientChoice();
             snapChoice(false);
+            softChoice(w);
             break;
         case Tool::Rotate: {
             orientChoice();
@@ -5716,6 +5874,7 @@ private:
             ImGui::SetNextItemWidth(w);
             if (ImGui::Combo("##rpivot", &p, "The middle\0The origin\0")) rotatePivot_ = p ? Pivot::Origin : Pivot::Middle;
             snapChoice(true);
+            softChoice(w);
             break;
         }
         case Tool::Scale: {
@@ -5728,6 +5887,7 @@ private:
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("The other side: drag a side, the opposite side stays (like stretching in a paint program).\nThe middle: both sides move.\nThe bottom: it stays standing on the ground.");
             snapChoice(false);
+            softChoice(w);
             break;
         }
         case Tool::Draw:
@@ -6394,6 +6554,8 @@ private:
         if (ImGui::Button("Flip", ImVec2((w - 6) / 2, 0))) flipNow();
         ImGui::SameLine(0, 6);
         if (ImGui::Button("Make face", ImVec2(-1, 0))) makeFaceNow();
+        if (ImGui::Button("Bridge two faces", ImVec2(w, 0))) bridgeNow();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Two faces with as many corners: taken out and joined by a tunnel");
         if (ImGui::Button("Make into its own object (P)", ImVec2(w, 0))) separateSelected();
         ImGui::SeparatorText("Edges");
         ImGui::SetNextItemWidth(w * 0.45f);
@@ -6406,6 +6568,10 @@ private:
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Round the selected edges (or the edges round the selected faces): width, steps");
         ImGui::SeparatorText("Points");
         if (ImGui::Button("Merge to middle (M)", ImVec2(w, 0))) mergeNow();
+        if (ImGui::Button("Smooth", ImVec2((w - 6) / 2, 0))) smoothPointsNow();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Even out bumps: each point towards its neighbours");
+        ImGui::SameLine(0, 6);
+        if (ImGui::Button("Push / pull (Alt+S)", ImVec2(-1, 0))) startPush();
         ImGui::SetNextItemWidth(w * 0.45f);
         ImGui::DragFloat("##md", &mergeDistance_, 0.0001f, 0.0f, 1.0f, "%.4f m");
         ImGui::SameLine();
@@ -6917,7 +7083,8 @@ private:
         rows("Objects and shape", {{"Tab / double-click", "Edit an object's shape"}, {"1 / 2 / 3", "Points / edges / faces (shape editing)"}, {"M", "Merge points"},
                                    {"P", "Selected faces into their own object"}, {"Shift + Scale drag", "Scale both sides (from the middle)"}, {"Ctrl+G", "Group into a folder"},
                                    {"Ctrl+Shift + / -", "Add together / take the others out (last picked kept)"}, {"Del", "Delete"}, {"Ctrl+D", "Duplicate"}, {"Ctrl+J", "Join objects into one"},
-                                   {"H / Alt+H", "Hide / show all"}});
+                                   {"H / Alt+H", "Hide / show all"}, {"/ or Shift+H", "Show only the selected (again: all)"},
+                                   {"Shift+O", "Soft selection: near points follow (wheel while dragging: how far)"}, {"Alt+S", "Push points out / pull in (shape)"}});
         rows("Files", {{"Ctrl+N / O / S", "New / open / save"}, {"Ctrl+Shift+S", "Save as"}, {"Ctrl+E", "Export (GLB, glTF, FBX, OBJ, 3MF, STL, PLY)"}, {"F12", "Save a picture of the view"},
                        {"Ctrl+Z / Ctrl+Y", "Undo / redo"}});
         ImGui::End();
