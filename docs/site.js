@@ -47,14 +47,28 @@
   $("why-title").textContent = F.why.title;
   for (const p of F.why.text) $("why-text").append(el("p", "nv-body", p));
 
-  // ── Features ──
-  for (const f of F.features) {
-    const card = el("article", "nv-card feature");
-    const body = el("div", "nv-card__body");
-    body.append(icon(f.icon), el("h3", "nv-card__title", f.title), el("p", "nv-body nv-text-secondary", f.text));
-    card.append(body);
-    $("feature-grid").append(card);
-  }
+  // ── Features: a tab each group, the cards in its panel ──
+  F.featureGroups.forEach((g, i) => {
+    const tab = el("button", "nv-nav__item", g.title);
+    tab.id = `feature-tab-${g.id}`;
+    tab.tabIndex = i ? -1 : 0;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", `features-${g.id}`);
+    tab.setAttribute("aria-selected", String(i === 0));
+    $("feature-tabs").append(tab);
+    const panel = el("div", "nv-tab-panel features");
+    Object.assign(panel, { id: `features-${g.id}`, hidden: i !== 0 });
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tab.id);
+    for (const f of F.features.filter((f) => f.group === g.id)) {
+      const card = el("article", "nv-card feature");
+      const body = el("div", "nv-card__body");
+      body.append(icon(f.icon), el("h3", "nv-card__title", f.title), el("p", "nv-body nv-text-secondary", f.text));
+      card.append(body);
+      panel.append(card);
+    }
+    $("feature-panels").append(panel);
+  });
 
   // ── Screenshots: a tab each, the picture in a window ──
   F.shots.forEach((s, i) => {
@@ -168,6 +182,32 @@
   const onScroll = () => nav.toggleAttribute("data-scrolled", scrollY > 4);
   addEventListener("scroll", onScroll, { passive: true });
   onScroll();
+
+  // The bar's marker travels to the section on screen (Niveus Continuity: it moves there, it
+  // doesn't jump), forward or back by which way you went.
+  const links = [...document.querySelectorAll("#nav-list .nv-nav__item")];
+  const sections = links.map((a) => document.querySelector(a.getAttribute("href")));
+  let current = -1;
+  const mark = (i) => {
+    if (i === current) return;
+    const forward = i > current;
+    const update = () => links.forEach((a, j) => (j === i ? a.setAttribute("aria-current", "location") : a.removeAttribute("aria-current")));
+    current = i;
+    // (Not over another change that's still moving — a tab handing over: starting one skips it.)
+    const busy = document.documentElement.hasAttribute("data-nv-direction");
+    if (window.nv && !busy) nv.transition(update, { direction: forward ? "forward" : "backward", scope: $("nav-list") });
+    else update();
+  };
+  let queued = false;
+  const spy = () => {
+    queued = false;
+    const line = innerHeight * 0.35;
+    let at = -1;
+    sections.forEach((sec, i) => { if (sec && !sec.hidden && sec.getBoundingClientRect().top <= line) at = i; });
+    mark(at);
+  };
+  addEventListener("scroll", () => { if (!queued) queued = true, requestAnimationFrame(spy); }, { passive: true });
+  spy();
 
   // A little Lua colouring for the scripting sample.
   function highlightLua(src) {

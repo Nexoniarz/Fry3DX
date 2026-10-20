@@ -28,7 +28,7 @@
   <!-- The page is built from content.js by site.js: edit content.js to update it. -->
   <nav class="nv-nav" id="top-nav" aria-label="Main">
     <a class="nv-nav__brand" href="#top"><img class="brand-logo" src="img/logo.svg" alt=""> Fry3DX</a>
-    <ul class="nv-nav__list nav-links">
+    <ul class="nv-nav__list nav-links" id="nav-list" style="--nv-selection-name: nv-nav-selection">
       <li><a class="nv-nav__item" href="#features">Features</a></li>
       <li><a class="nv-nav__item" href="#look">Look</a></li>
       <li><a class="nv-nav__item" href="#scripting">Scripting</a></li>
@@ -87,7 +87,8 @@
         <span class="nv-overline">What it does</span>
         <h2 class="nv-heading">The useful parts of the big modellers, without the hundred menus.</h2>
       </div>
-      <div class="features" id="feature-grid"></div>
+      <div class="nv-nav-tabs" role="tablist" aria-label="What it does" id="feature-tabs" data-nv-tabs style="--nv-selection-name: nv-feature-tabs"></div>
+      <div class="tab-box" id="feature-panels"></div>
     </section>
 
     <section class="shell section" id="look">
@@ -95,8 +96,8 @@
         <span class="nv-overline">How it looks</span>
         <h2 class="nv-heading">Five tabs: what you're doing, not where it's hidden.</h2>
       </div>
-      <div class="nv-nav-tabs" role="tablist" aria-label="Screenshots" id="shot-tabs" data-nv-tabs></div>
-      <div id="shot-panels" class="shots"></div>
+      <div class="nv-nav-tabs" role="tablist" aria-label="Screenshots" id="shot-tabs" data-nv-tabs style="--nv-selection-name: nv-shot-tabs"></div>
+      <div id="shot-panels" class="tab-box shots"></div>
     </section>
 
     <section class="shell section" id="scripting" hidden>

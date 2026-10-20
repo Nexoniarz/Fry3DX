@@ -18,20 +18,29 @@ window.FRY = {
     ],
   },
 
+  // The feature tabs, in order (each feature names its group).
+  featureGroups: [
+    { id: "make", title: "Make" },
+    { id: "paint", title: "Paint" },
+    { id: "print", title: "Render & print" },
+    { id: "work", title: "Work" },
+  ],
+
   features: [
-    { icon: "cube", title: "Shapes that stay editable", text: "Cube, cylinder, sphere, torus, stairs, arch and more, plus starter models like a table, chair or barrel. Change their sizes any time in Properties." },
-    { icon: "pen", title: "Draw a shape anywhere", text: "Click an outline on the ground or straight on the face of another object: it becomes a new part, gets added to it, or cuts into it." },
-    { icon: "combine", title: "Add, subtract, overlap", text: "Combine objects: add them together, take one out of another, or keep only where they overlap. The result is always closed and ready to print." },
-    { icon: "points", title: "Real shape editing", text: "Points, edges and faces. Extrude, inset, round edges, loop cut, knife, merge. Shift+click picks a whole loop, Shift+Ctrl+click a ring." },
-    { icon: "hole", title: "Holes for screws and nuts", text: "Round, rectangle, triangle or hexagon. M2 to M8 screw and nut sizes ready, with a little room added so the print actually fits." },
-    { icon: "copies", title: "Copies and thickness", text: "Copies in a row or round in a circle. Make a surface thick, or a solid hollow with walls exactly as thick as you need." },
-    { icon: "brush", title: "Paint and stickers", text: "Paint on the model or on its flat picture. Paste any picture (Ctrl+V) and it goes on like a sticker that bends over edges and corners." },
-    { icon: "layout", title: "Layout tab", text: "Move, turn and size the flat frames of the surface by hand. The paint follows, so the model looks the same." },
-    { icon: "print", title: "Made for 3D printing", text: "Your printer's plate in the view, sizes in millimetres, checks for holes and flipped faces with fix buttons, overhangs shown red, weight and filament." },
-    { icon: "sun", title: "See it rendered", text: "Solid view for modelling, a real renderer with sky, sun and soft shadows when you want to see it properly. Save a picture with F12." },
-    { icon: "folder", title: "Folders and groups", text: "Layers with folders inside folders, drag and drop, show/hide and lock whole groups, and a button on every row that brings the camera to it." },
-    { icon: "phone", title: "On your phone too", text: "Not a viewer: the whole modeller. Big buttons, one finger turns the view, two move and pinch to zoom, holding still is a right-click. Files through the phone's own picker." },
-    { icon: "save", title: "Never lose work", text: "Its own packed .fry file, autosave in the background, recovery after a crash, and a Save / Don't save / Cancel when closing." },
+    { group: "make", icon: "cube", title: "Shapes that stay editable", text: "Cube, cylinder, sphere, torus, stairs, arch and more, plus starter models like a table, chair or barrel. Change their sizes any time in Properties." },
+    { group: "make", icon: "pen", title: "Draw a shape anywhere", text: "Click an outline on the ground or straight on the face of another object: it becomes a new part, gets added to it, or cuts into it." },
+    { group: "make", icon: "combine", title: "Add, subtract, overlap", text: "Combine objects: add them together, take one out of another, or keep only where they overlap. The result is always closed and ready to print." },
+    { group: "make", icon: "points", title: "Real shape editing", text: "Points, edges and faces. Extrude, inset, round edges, loop cut, knife, merge. Shift+click picks a whole loop, Shift+Ctrl+click a ring." },
+    { group: "make", icon: "hole", title: "Holes for screws and nuts", text: "Round, rectangle, triangle or hexagon. M2 to M8 screw and nut sizes ready, with a little room added so the print actually fits." },
+    { group: "make", icon: "copies", title: "Copies and thickness", text: "Copies in a row or round in a circle. Make a surface thick, or a solid hollow with walls exactly as thick as you need." },
+    { group: "paint", icon: "brush", title: "Paint and stickers", text: "Paint on the model or on its flat picture. Paste any picture (Ctrl+V) and it goes on like a sticker that bends over edges and corners." },
+    { group: "paint", icon: "layout", title: "Layout tab", text: "Move, turn and size the flat frames of the surface by hand. The paint follows, so the model looks the same." },
+    { group: "print", icon: "print", title: "Made for 3D printing", text: "Your printer's plate in the view, sizes in millimetres, checks for holes and flipped faces with fix buttons, overhangs shown red, weight and filament." },
+    { group: "print", icon: "sun", title: "See it rendered", text: "Solid view for modelling, a real renderer with sky, sun and soft shadows when you want to see it properly. Save a picture with F12." },
+    { group: "work", icon: "folder", title: "Folders and groups", text: "Layers with folders inside folders, drag and drop, show/hide and lock whole groups, and a button on every row that brings the camera to it." },
+    { group: "work", icon: "phone", title: "On your phone too", text: "Not a viewer: the whole modeller. Big buttons, one finger turns the view, two move and pinch to zoom, holding still is a right-click. Files through the phone's own picker." },
+    { group: "work", icon: "code", title: "Scripts, if you want them", text: "Lua in a Script panel: build a town in a loop, turn a profile into a vase, move points by a formula. F5 runs it, Ctrl+Z takes it all back." },
+    { group: "work", icon: "save", title: "Never lose work", text: "Its own packed .fry file, autosave in the background, recovery after a crash, and a Save / Don't save / Cancel when closing." },
   ],
 
   shots: [
@@ -42,6 +51,30 @@ window.FRY = {
     { img: "img/combine.webp", title: "Combine", text: "A cylinder taken out of a cube, copies in a row in a folder, a plane made thick." },
     { img: "img/crash.webp", title: "Even the crash screen", text: "If something does get burnt, your work comes back from the last autosave." },
   ],
+
+  scripting: {
+    title: "When clicking gets repetitive, write it down.",
+    text: "Fry3DX has Lua built in, and a Script panel to write it in. Everything you can click, a script can do: add shapes and change their settings, combine them, move every point by a formula, set the sun. It's optional, small, and can't touch anything outside the scene.",
+    points: [
+      "F5 runs it; one Ctrl+Z takes back everything it did",
+      "If it stops with an error, nothing it did is kept",
+      "Examples to start from: stairs, a vase, a gear, a town, a box with a lid",
+      "The ? button lists every function, right next to your script",
+    ],
+    file: "spiral_stairs.lua",
+    code: `-- Spiral stairs round a pillar: change the numbers, press F5 again.
+local steps, rise, turn = 18, 0.18, 22
+
+fry.add("pillar", {radius = 0.12, height = steps * rise + 0.3})
+for i = 0, steps - 1 do
+  local step = fry.add("cube", {width = 0.9, depth = 0.32, height = 0.05,
+                                color = "#b07a4a"})
+  local a = math.rad(i * turn)
+  step.turn = {0, 0, i * turn}
+  step.position = {math.cos(a) * 0.45, math.sin(a) * 0.45, (i + 1) * rise}
+end
+fry.frame()`,
+  },
 
   formats: {
     open: [".fry"],

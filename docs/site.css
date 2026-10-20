@@ -70,8 +70,10 @@ body { background: var(--nv-color-background); }
 .feature__icon svg { inline-size: var(--nv-space-5); block-size: var(--nv-space-5); }
 .feature .nv-card__title { margin-block-end: var(--nv-space-2); }
 
-/* --- Screenshots ----------------------------------------------------------- */
-.shots { margin-block-start: var(--nv-space-6); }
+/* --- Tabs: the panel box they hand over in (Niveus Continuity) ---------------- */
+.tab-box { margin-block-start: var(--nv-space-6); display: grid; }
+.tab-box > [hidden] { display: none; }
+.features[hidden] { display: none; }
 .shot { display: grid; gap: var(--nv-space-4); }
 .shot[hidden] { display: none; }
 
