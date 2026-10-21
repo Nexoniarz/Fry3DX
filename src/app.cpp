@@ -778,8 +778,16 @@ private:
     Scene scene_;
     std::string startPath_, path_;
     bool dirty_ = false;
+    // An undo step. Its objects without their shapes (points, faces, painting's layout): those are
+    // kept apart and shared with the steps before and after where they're the same, so a step
+    // that moved one thing doesn't copy every shape in the scene again.
+    struct Shape {
+        std::shared_ptr<const Mesh> mesh;
+        std::shared_ptr<const std::vector<std::vector<glm::vec2>>> uvs;
+    };
     struct Snapshot {
         Scene scene;
+        std::map<uint32_t, Shape> shapes;
         std::set<uint32_t> selected;
         uint32_t active;
         Mode mode;
@@ -789,6 +797,27 @@ private:
         double at = 0;
     };
     std::vector<Snapshot> undo_, redo_;
+    std::map<uint32_t, Shape> lastShapes_; // (each object's shape as last kept: the next step shares it if it's the same)
+    Snapshot snapshot(std::string label, double at) {
+        Snapshot s;
+        s.scene.look = scene_.look, s.scene.folders = scene_.folders, s.scene.references = scene_.references, s.scene.nextId = scene_.nextId; // (not the scripts: not undone)
+        s.scene.objects.reserve(scene_.objects.size());
+        std::map<uint32_t, Shape> kept;
+        for (Object& o : scene_.objects) {
+            Mesh mesh = std::move(o.mesh);
+            auto uvs = std::move(o.uvs);
+            s.scene.objects.push_back(o); // (all but its shape)
+            o.mesh = std::move(mesh), o.uvs = std::move(uvs);
+            Shape k = lastShapes_.count(o.id) ? lastShapes_[o.id] : Shape{};
+            if (!k.mesh || k.mesh->verts != o.mesh.verts || k.mesh->faces != o.mesh.faces) k.mesh = std::make_shared<const Mesh>(o.mesh);
+            if (!k.uvs || *k.uvs != o.uvs) k.uvs = std::make_shared<const std::vector<std::vector<glm::vec2>>>(o.uvs);
+            s.shapes[o.id] = kept[o.id] = k;
+        }
+        lastShapes_ = std::move(kept); // (gone objects' shapes: only in the steps that have them)
+        s.selected = selected_, s.active = active_, s.mode = mode_, s.verts = selVerts_, s.faces = selFaces_, s.edges = selEdges_;
+        s.label = std::move(label), s.at = at;
+        return s;
+    }
     std::vector<Snapshot> redoKept_; // (what redo had before the last undo point: back if that step is dropped)
 
     Mode mode_ = Mode::Object;
@@ -1099,7 +1128,7 @@ private:
     }
 
     void pushUndo() {
-        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, "", now()});
+        undo_.push_back(snapshot("", now()));
         if (undo_.size() > 200) undo_.erase(undo_.begin());
         redoKept_ = std::move(redo_), redo_.clear();
         dirty_ = true, ++edits_;
@@ -1120,6 +1149,9 @@ private:
         std::vector<fry::SceneScript> scripts = std::move(scene_.scripts);
         scene_ = s.scene, selected_ = s.selected, active_ = s.active, mode_ = s.mode, followAt_.clear();
         scene_.scripts = std::move(scripts);
+        for (Object& o : scene_.objects)
+            if (auto it = s.shapes.find(o.id); it != s.shapes.end()) o.mesh = *it->second.mesh, o.uvs = *it->second.uvs;
+        lastShapes_ = s.shapes;
         selVerts_ = s.verts, selFaces_ = s.faces, selEdges_ = s.edges;
         if (mode_ == Mode::Edit && !find(active_)) mode_ = Mode::Object;
         touchAll();
@@ -1127,14 +1159,14 @@ private:
     }
     void undo() {
         if (undo_.empty()) return say("Nothing to undo");
-        redo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, undo_.back().label, now()}); // (its name: the step it brings back)
+        redo_.push_back(snapshot(undo_.back().label, now())); // (its name: the step it brings back)
         restore(undo_.back());
         undo_.pop_back();
         redoKept_.clear();
     }
     void redo() {
         if (redo_.empty()) return say("Nothing to redo");
-        undo_.push_back({scene_, selected_, active_, mode_, selVerts_, selFaces_, selEdges_, redo_.back().label, now() - 10});
+        undo_.push_back(snapshot(redo_.back().label, now() - 10));
         restore(redo_.back());
         redo_.pop_back();
         redoKept_.clear();
@@ -1144,7 +1176,7 @@ private:
         scene_ = {}, followAt_.clear();
         script_ = 0, scriptPath_.clear();
         path_.clear();
-        undo_.clear(), redo_.clear(), selected_.clear();
+        undo_.clear(), redo_.clear(), selected_.clear(), lastShapes_.clear();
         mode_ = Mode::Object, active_ = 0;
         addShape("cube", false);
         dirty_ = false;
@@ -1316,7 +1348,7 @@ private:
             std::erase_if(o.layers, [](const PictureLayer& l) { return !l.image; });
         }
         path_ = picked;
-        undo_.clear(), redo_.clear(), selected_.clear();
+        undo_.clear(), redo_.clear(), selected_.clear(), lastShapes_.clear();
         mode_ = Mode::Object, active_ = 0, dirty_ = false, ledit_ = {};
         touchAll();
         frameAll();
