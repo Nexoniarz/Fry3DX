@@ -44,6 +44,12 @@ struct PluginCommand {
     int ref = 0;                                           // (its run function, in the plug-in's Lua)
 };
 
+// A mouse tool a plug-in adds (fry.tool): with it on, a click in the view calls it with the spot.
+struct PluginTool {
+    std::string name, help;
+    int ref = 0; // (its click function)
+};
+
 class Plugin {
 public:
     explicit Plugin(std::string file); // "stairs.lua": shows in errors, and as its name until fry.plugin{name=} says
@@ -54,9 +60,12 @@ public:
     bool load(ScriptHost& host, const std::string& code, std::string* error);
     // One of its commands, with the settings asked for (in order). Like a script: one run.
     ScriptResult run(ScriptHost& host, size_t command, const std::vector<double>& settings);
+    // One of its tools, clicked: where (the world), the surface's way out there, the object (0: the ground).
+    ScriptResult click(ScriptHost& host, size_t tool, glm::vec3 at, glm::vec3 normal, uint32_t object);
 
     std::string file, name, about;
     std::vector<PluginCommand> commands;
+    std::vector<PluginTool> tools;
 
 private:
     struct State;

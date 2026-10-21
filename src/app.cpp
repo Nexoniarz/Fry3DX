@@ -212,6 +212,10 @@ float distToSegment(ImVec2 p, ImVec2 a, ImVec2 b) {
     return std::sqrt(dx * dx + dy * dy);
 }
 
+std::string lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return s;
+}
 bool insidePolygon(ImVec2 p, const std::vector<ImVec2>& poly) {
     bool in = false;
     for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
@@ -478,6 +482,14 @@ public:
             for (int i = 0; i <= 40; ++i) self->paintAt(ImVec2(p0.x + (p1.x - p0.x) * float(i) / 40, p0.y + (p1.y - p0.y) * float(i) / 40), i == 0);
             self->endStroke();
         }, "Fry3DX: fry_stroke x0 y0 x1 y1: a brush stroke across the view (0..1)");
+        static keel::Cmd ptool("fry_tooluse", [](const keel::Args& a) { // a plug-in tool by name, clicked at x y (0..1 of the view)
+            if (a.size() < 4 || !self->viewReady()) return;
+            for (const PluginEntry& e : self->plugins_)
+                if (e.p)
+                    for (const fry::PluginTool& t : e.p->tools)
+                        if (t.name == a[1]) self->pluginTool_ = {e.file, t.name};
+            self->clickPluginTool(vp(a[2], a[3]));
+        }, "Fry3DX: fry_tooluse \"name\" x y: click with a plug-in tool (0..1 of the view)");
         static keel::Cmd stencil("fry_stencil", [](const keel::Args& a) { // a box stencil, 0..1 of the view
             if (a.size() < 5 || !self->viewReady()) return;
             const ImVec2 p0 = vp(a[1], a[2]), p1 = vp(a[3], a[4]);
@@ -703,6 +715,8 @@ public:
         else if (drag_.active) cancelDrag();
         else if (slide_.active) cancelSlide();
         else if (printTool_ == PrintTool::Measure) printTool_ = PrintTool::None, measure_.clear();
+        else if (!pluginTool_.first.empty()) pluginTool_ = {};
+        else if (drawingStencil_ || stencilOn_) drawingStencil_ = stencilOn_ = false, stencil_.clear();
         else if (mode_ == Mode::Edit) leaveEdit();
         else selected_.clear();
     }
@@ -1020,6 +1034,8 @@ private:
     };
     std::vector<PluginEntry> plugins_;
     bool showPlugins_ = false;
+    std::pair<std::string, std::string> pluginTool_; // (the plug-in tool that's on: its file and name)
+    std::string pluginFilter_;
     // ── Commands: found by typing, on keys of your own, round the mouse ──
     std::vector<fry::Command> commands_;
     fry::CommandSearch search_;
@@ -1643,7 +1659,7 @@ private:
                 }
                 return say(std::format("{} works on whole objects (Tab leaves shape editing)", i.name));
             }
-        tool_ = t;
+        tool_ = t, pluginTool_ = {};
         drawPts_.clear(), knifePts_.clear();
         if ((t == Tool::Extrude || t == Tool::Inset) && elem_ != Elem::Face) elem_ = Elem::Face, clearElements();
     }
@@ -5251,6 +5267,10 @@ private:
             return;
         }
         if (!mouseInView(io)) return;
+        if (!pluginTool_.first.empty() && mode_ == Mode::Object) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoverHandle(io.MousePos) < 0) clickPluginTool(io.MousePos);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || !pluginToolFound()) return;
+        }
         if (tool_ == Tool::Draw) {
             if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
             if (touch()) return void((boxing_ = touchOrbit_ = tapDraw_ = true, boxStart_ = io.MousePos)); // (a finger: a tap puts a point down when it lifts, a drag turns the view)
@@ -6652,10 +6672,52 @@ private:
             addMenuItems();
             ImGui::EndPopup();
         }
+        // Mouse tools from plug-ins (fry.tool): by name, as plug-ins load again.
+        if (mode_ == Mode::Object) {
+            bool first = true;
+            for (size_t i = 0; i < plugins_.size(); ++i)
+                if (pluginUsable(i))
+                    for (const fry::PluginTool& t : plugins_[i].p->tools) {
+                        if (std::exchange(first, false)) ImGui::SeparatorText("Plug-in tools");
+                        const bool on = pluginTool_ == std::pair(plugins_[i].file, t.name);
+                        if (ImGui::Selectable(std::format("{}##{}", t.name, plugins_[i].file).c_str(), on, 0, ImVec2(w, 0)))
+                            on ? setTool(Tool::Select) : void((pluginTool_ = {plugins_[i].file, t.name}, tool_ = Tool::Select, say(t.name + ": click in the view (Esc stops)")));
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s(%s)", t.help.c_str(), t.help.empty() ? "" : "\n", plugins_[i].p->name.c_str());
+                    }
+        }
         ImGui::Spacing();
-        for (const ToolInfo& t : kTools)
-            if (t.tool == tool_) ImGui::TextColored(accentText(), "%s", t.name);
+        if (pluginTool_.first.empty()) // (a plug-in tool: its row shows it's on)
+            for (const ToolInfo& t : kTools)
+                if (t.tool == tool_) ImGui::TextColored(accentText(), "%s", t.name);
         ImGui::End();
+    }
+    // The plug-in tool that's on: which plug-in and which of its tools (none: -1).
+    std::pair<int, int> pluginToolAt() const {
+        for (size_t i = 0; i < plugins_.size(); ++i)
+            if (plugins_[i].file == pluginTool_.first && pluginUsable(i))
+                for (size_t k = 0; k < plugins_[i].p->tools.size(); ++k)
+                    if (plugins_[i].p->tools[k].name == pluginTool_.second) return {int(i), int(k)};
+        return {-1, -1};
+    }
+    bool pluginToolFound() const { return pluginToolAt().first >= 0; }
+    // A plug-in tool's click: the spot on what's under the mouse, or on the ground.
+    void clickPluginTool(ImVec2 mouse) {
+        const auto [i, k] = pluginToolAt();
+        if (i < 0) return pluginTool_ = {}, say("That plug-in tool isn't loaded any more");
+        const Ray ray = mouseRay(mouse);
+        glm::vec3 at, n(0, 0, 1);
+        uint32_t onto = 0;
+        const Hit h = pickObject(ray, 0, true);
+        if (const Object* o = h.object ? find(h.object) : nullptr) {
+            at = ray.origin + ray.dir * h.t, onto = o->id;
+            n = glm::normalize(glm::transpose(glm::inverse(glm::mat3(objectMatrix(*o)))) * faceNormal(o->mesh, h.face));
+        } else if (auto g = hitPlane(ray, glm::vec3(0.0f), n)) at = *g;
+        else return;
+        pushUndo();
+        bool frame = false;
+        fry::ScriptHost host{&scene_, &selected_, &active_, [this](const std::string& t) { scriptLine(t); }, [&] { frame = true; }};
+        const fry::ScriptResult r = plugins_[size_t(i)].p->click(host, size_t(k), at, n, onto);
+        finishRun(r, pluginTool_.second, frame);
     }
 
     void paintToolbox(float w) {
@@ -7859,6 +7921,16 @@ private:
         for (const PluginEntry& e : plugins_) loaded += e.p && e.error.empty();
         if (loaded) keel::log::info("Plug-ins: {} loaded", loaded);
     }
+    void copyPlugin(const PluginEntry& e) {
+        const auto text = keel::fs::readText(e.path);
+        if (!text) return say("Couldn't read " + e.file);
+        std::error_code ec;
+        stdfs::create_directories(pluginsFolder(), ec);
+        const stdfs::path to = stdfs::path(pluginsFolder()) / ("my_" + e.file);
+        if (!stdfs::exists(to)) std::ofstream(to, std::ios::binary) << *text;
+        setPluginOn(e.file, false); // (loads them again)
+        say("Your copy: " + to.string() + " (Open the plug-ins folder, change it, Load them again)");
+    }
     void openPluginsFolder() {
         std::error_code ec;
         stdfs::create_directories(pluginsFolder(), ec);
@@ -7944,9 +8016,21 @@ private:
         if (ImGui::Button("How to write one")) showScript_ = showScriptHelp_ = true;
         ImGui::Spacing();
         if (plugins_.empty()) ImGui::TextDisabled("None yet.");
+        else {
+            ImGui::SetNextItemWidth(-1);
+            inputString("##filter", pluginFilter_, "Look for a plug-in...");
+        }
         std::optional<std::pair<std::string, bool>> toggle;
         for (size_t i = 0; i < plugins_.size(); ++i) {
             const PluginEntry& e = plugins_[i];
+            if (!pluginFilter_.empty()) {
+                std::string all = lower(e.file + " " + (e.p ? e.p->name + " " + e.p->about : std::string()));
+                if (e.p)
+                    for (const fry::PluginCommand& c : e.p->commands) all += " " + lower(c.name + " " + c.help);
+                if (e.p)
+                    for (const fry::PluginTool& t : e.p->tools) all += " " + lower(t.name + " " + t.help);
+                if (all.find(lower(pluginFilter_)) == std::string::npos) continue;
+            }
             ImGui::PushID(int(i));
             ImGui::BeginChild("plugin", ImVec2(0, 0), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY);
             bool on = e.on;
@@ -7966,11 +8050,16 @@ private:
             } else if (e.p) {
                 std::string adds;
                 for (const fry::PluginCommand& c : e.p->commands) adds += std::format("{}{} ({} menu)", adds.empty() ? "" : ", ", c.name, c.menu == "add" ? "Add" : c.menu == "object" ? "Object" : "Script > Plug-ins");
+                for (const fry::PluginTool& t : e.p->tools) adds += std::format("{}{} (a tool in the Toolbox)", adds.empty() ? "" : ", ", t.name);
                 size_t mats = 0;
                 for (const MaterialPreset& m : ownMaterials()) mats += m.from == e.file;
                 if (mats) adds += std::format("{}{} material{}", adds.empty() ? "" : ", ", mats, mats == 1 ? "" : "s");
                 ImGui::TextColored(roleColor(Role::TextTertiary), "Adds: %s", adds.empty() ? "nothing yet" : adds.c_str());
             } else ImGui::TextDisabled("Turned off");
+            if (e.bundled) { // (to change one that comes with Fry3DX: your own copy, in your folder)
+                if (ImGui::SmallButton("Make my own copy to change")) copyPlugin(e);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copies it into your plug-ins folder (as my_%s) and turns this one off", e.file.c_str());
+            }
             ImGui::EndChild();
             ImGui::PopID();
         }

@@ -745,6 +745,20 @@ int fryCommand(lua_State* L) {
     p->commands.push_back(std::move(c));
     return 0;
 }
+// fry.tool{name = "Stamp", help = "...", click = function(at, normal, object) ... end}
+int fryTool(lua_State* L) {
+    Plugin* p = context(L).plugin;
+    if (!p) luaL_error(L, "fry.tool is for plug-ins: put this script in the plug-ins folder (Script > Plug-ins)");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    PluginTool t;
+    t.name = fieldString(L, 1, "name");
+    if (t.name.empty()) luaL_error(L, "a tool needs a name");
+    t.help = fieldString(L, 1, "help");
+    if (lua_getfield(L, 1, "click") != LUA_TFUNCTION) luaL_error(L, "a tool needs click = function(at, normal, object) ... end");
+    t.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    p->tools.push_back(std::move(t));
+    return 0;
+}
 int fryLook(lua_State* L) { // fry.look{sun_turn = 40, sky = false, ...}; returns the look as it is
     Look& k = scene(L).look;
     struct Num {
@@ -803,7 +817,7 @@ const luaL_Reg kFry[] = {
     {"add", fryAdd},       {"mesh", fryMesh},         {"lathe", fryLathe}, {"extrude", fryExtrude}, {"objects", fryObjects}, {"find", fryFind},
     {"selected", frySelected}, {"select", frySelect}, {"clear", fryClear},  {"group", fryGroup},     {"shapes", fryShapes},   {"look", fryLook}, {"materials", fryMaterials},
     {"vec", fryVec},       {"say", fryPrint},         {"frame", fryFrame}, {"help", fryHelp},       {"material", fryMaterial}, {"plugin", fryPlugin},
-    {"command", fryCommand}, {nullptr, nullptr},
+    {"command", fryCommand}, {"tool", fryTool}, {nullptr, nullptr},
 };
 
 // Stops a script that's run too long (an endless loop).
@@ -945,6 +959,22 @@ ScriptResult Plugin::run(ScriptHost& host, size_t command, const std::vector<dou
     return r;
 }
 
+ScriptResult Plugin::click(ScriptHost& host, size_t tool, glm::vec3 at, glm::vec3 normal, uint32_t object) {
+    if (!s_->L || tool >= tools.size()) return {false, "that tool isn't there any more"};
+    s_->ctx.host = &host, s_->ctx.start = std::chrono::steady_clock::now(), s_->ctx.made = 0;
+    lua_State* L = s_->L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, tools[tool].ref);
+    pushVec(L, at), pushVec(L, normal);
+    if (object && findObject(*host.scene, object)) pushObject(L, object);
+    else lua_pushnil(L);
+    ScriptResult r;
+    r.error = call(L, 3);
+    r.ok = r.error.empty();
+    r.objectsMade = s_->ctx.made;
+    tidySelection(host);
+    return r;
+}
+
 const char* scriptHelp() {
     return R"(Scripts are Lua (lua.org/manual/5.4). Sizes are metres, turns degrees, Z is up.
 
@@ -976,6 +1006,7 @@ An object (o):
   o:points()  o:faces()  o:setpoints(points)  o:setshape(points, faces)  o:set(name, value)  o:settings()
 
 Plug-ins: scripts in the plug-ins folder (Script > Plug-ins), run when Fry3DX starts and kept.
+fry.tool{name, help, click}      (plug-ins) a mouse tool in the Toolbox: click(at, normal, object) where the view's clicked
 fry.plugin{name, about}          what it's called in the Plug-ins window
 fry.command{name, menu, help, settings, run}   a command in a menu: menu "add", "object" or "script";
       settings {{"steps", 12}, {"rise", 0.18}} are asked for first, then run(s) gets s.steps, s.rise.
