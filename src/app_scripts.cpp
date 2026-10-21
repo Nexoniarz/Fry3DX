@@ -449,7 +449,8 @@ auto App::helpWindow() -> void {
     rows("Looking around", {{"Right drag", "Turn the camera where it stands"}, {"Right held + W A S D", "Move where you look (Q / E: down and up)"},
                             {"Arrow keys", "Move where you look, any time (Page Up / Down: down and up)"}, {"Wheel", "Forward and back"},
                             {"Shift + wheel", "How fast every way of moving goes"}, {"Shift (while moving)", "Faster"},
-                            {"Alt + right drag", "Orbit round what's picked (or what you look at)"}, {"Middle drag / Shift+Right drag", "Pan"},
+                            {"Alt + right drag", "Orbit round what's picked (or what you look at)"},
+                            {"Shift+C", "Switch the camera: fly / orbit (right drag round what you look at, the wheel zooms)"}, {"Middle drag / Shift+Right drag", "Pan"},
                             {"Orbit / Pan / Zoom buttons", "Drag them (touchpads)"}, {"F", "Frame the selection"}, {"Home", "Frame everything"},
                             {"Numpad 1 / 3 / 7", "Front / side / top (Shift: the opposite)"}, {"Numpad 5", "Flat view / 3D"},
                             {"Z / Shift+Z", "Solid or Rendered / Wireframe"}, {"Alt+Z", "X-ray: see and pick through"}});

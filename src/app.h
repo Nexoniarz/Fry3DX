@@ -276,6 +276,7 @@ extern keel::Cvar fry_uiscale;
 extern keel::Cvar fry_uisize;
 extern keel::Cvar fry_theme;
 extern keel::Cvar fry_movespeed;
+extern keel::Cvar fry_camera;
 extern keel::Cvar fry_pluginsoff;
 extern keel::Cvar fry_autosave;
 

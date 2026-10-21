@@ -22,6 +22,7 @@ keel::Cvar fry_touch("fry_touch", "0", keel::CVAR_ARCHIVE, "Fry3DX: the phone la
 keel::Cvar fry_uiscale("fry_uiscale", "0", 0, "Fry3DX: draw the UI this many times bigger (0: by the screen)");
 keel::Cvar fry_uisize("fry_uisize", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout's size, times");
 keel::Cvar fry_movespeed("fry_movespeed", "1", keel::CVAR_ARCHIVE, "Fry3DX: how fast the camera moves (keys, wheel, pan): Shift + wheel changes it");
+keel::Cvar fry_camera("fry_camera", "0", keel::CVAR_ARCHIVE, "Fry3DX: the camera: 0 flies (right drag turns it where it stands, WASD), 1 orbits (right drag round what you look at, the wheel zooms)");
 keel::Cvar fry_theme("fry_theme", "0", keel::CVAR_ARCHIVE, "Fry3DX: how it looks: 0 like the desktop, 1 dark, 2 light");
 keel::Cvar fry_pluginsoff("fry_pluginsoff", "", keel::CVAR_ARCHIVE, "Fry3DX: plug-ins turned off (their file names, with | between)");
 keel::Cvar fry_autosave("fry_autosave", "2", keel::CVAR_ARCHIVE, "Fry3DX: autosave every this many minutes while there are changes (0: off)");
@@ -283,6 +284,10 @@ auto App::init() -> void {
             }
         self->say("fry_hold: no key called " + a[1]);
     }, "Fry3DX: fry_hold key frames: hold a key down (UpArrow, PageUp...)");
+    static keel::Cmd where("fry_where", [](const keel::Args&) {
+        self->say(std::format("camera: yaw {:.1f} pitch {:.1f} distance {:.3f} target {:.2f} {:.2f} {:.2f} eye {:.2f} {:.2f} {:.2f}", self->yaw_, self->pitch_, self->dist_,
+                              self->target_.x, self->target_.y, self->target_.z, self->eye_.x, self->eye_.y, self->eye_.z));
+    }, "Fry3DX: where the camera is");
     static keel::Cmd mouse("fry_mouse", [](const keel::Args& a) { // the mouse to x y (0..1 of the view)
         if (a.size() < 3) return;
         ImGui::GetIO().AddMousePosEvent(self->viewMin_.x + (self->viewMax_.x - self->viewMin_.x) * std::stof(a[1]), self->viewMin_.y + (self->viewMax_.y - self->viewMin_.y) * std::stof(a[2]));
@@ -1758,6 +1763,7 @@ auto App::shortcuts(ImGuiIO& io) -> void {
     if (key(ImGuiKey_X)) setTool(Tool::Extrude);
     if (key(ImGuiKey_I)) setTool(Tool::Inset);
     if (key(ImGuiKey_B)) setTool(Tool::Bevel);
+    if (key(ImGuiKey_C) && shift) return runCommand("view.camera");
     if (key(ImGuiKey_C)) setTool(Tool::LoopCut);
     if (key(ImGuiKey_K)) setTool(Tool::Knife);
     if (key(ImGuiKey_O) && !shift) setTool(Tool::Hole);

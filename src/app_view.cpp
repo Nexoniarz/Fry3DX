@@ -220,10 +220,11 @@ auto App::updateCamera(ImGuiIO& io) -> void {
     const bool rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right), midDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
     // Right drag turns the camera where it stands (as in games, Unreal, Unity); Alt + right drag
     // turns it round what's picked (or what it looks at). A finger on a phone: round, still.
+    const bool orbitCamera = fry_camera.i() == 1; // (View > Camera: round what you look at, as in Blender)
     if (inView && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !io.KeyShift) {
-        if (io.KeyAlt || touch()) {
+        if (io.KeyAlt || touch() || orbitCamera) {
             orbiting_ = true;
-            if (!selected_.empty() && !touch()) { // (round the middle of what's picked)
+            if (!selected_.empty() && !touch() && !orbitCamera) { // (round the middle of what's picked)
                 glm::vec3 lo(1e30f), hi(-1e30f);
                 for (const Object& o : scene_.objects)
                     if (selected_.count(o.id)) lo = glm::min(lo, o.position), hi = glm::max(hi, o.position);
@@ -258,7 +259,8 @@ auto App::updateCamera(ImGuiIO& io) -> void {
         // The wheel moves the camera straight forward or back (where it looks), a fifth of the
         // way to what's ahead each notch, but never less than a little of the scene's size: so it
         // doesn't creep to a stop in front of a surface (it goes through). In a flat view: closer.
-        if (view_ != View::Perspective) dist_ = std::clamp(dist_ * std::pow(0.85f, io.MouseWheel), 0.01f, 5000.0f);
+        // The orbiting camera: closer to (or further from) what it turns round.
+        if (view_ != View::Perspective || orbitCamera) dist_ = std::clamp(dist_ * std::pow(0.85f, io.MouseWheel), 0.01f, 5000.0f);
         else {
             float size = 0.0f; // (the biggest object's size: the least step is a little of it)
             for (const Object& o : scene_.objects)

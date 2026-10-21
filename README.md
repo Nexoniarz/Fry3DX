@@ -105,7 +105,9 @@ Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print**
 - **Getting round**, as in games, Unreal or Unity: right drag turns the camera where it stands,
   and while it's held W A S D move where you look (Q / E: down, up). The **arrow keys** move any
   time (Page Up / Down: down and up), the **wheel** goes forward and back, **Shift + wheel** sets
-  how fast it all goes. Alt + right drag orbits round what's picked; middle drag pans.
+  how fast it all goes. Alt + right drag orbits round what's picked; middle drag pans. Rather
+  orbit, as in Blender? **Shift+C** (or View > Camera) switches: right drag turns round what you
+  look at and the wheel zooms.
 - **Solid** view for modelling, **Rendered** with a real sky, sun and soft shadows (Z). Wireframe
   (Shift+Z), X-ray (Alt+Z). The Render tab: the sun, sky, ground, brightness, shadows, glow;
   F12 saves a picture of just the view.

@@ -506,6 +506,11 @@ auto App::buildCommands() -> void {
     add("view.only", "Show only the selected (again: all)", "View", "/", [this] { showOnly(selected_); }, picked, "isolate local view hide");
     add("view.unhide", "Show everything", "View", "Alt+H", [this] { for (Object& o : scene_.objects) o.visible = true; }, {}, "unhide");
     add("view.layout", "Put the panels back as they were", "View", "", [this] { resetLayout(); }, {}, "reset layout workspace default panels");
+    add("view.camera", "Camera: fly or orbit (switch)", "View", "Shift+C", [this] {
+        keel::execute(std::format("fry_camera {}", fry_camera.i() == 1 ? 0 : 1));
+        say(fry_camera.i() == 1 ? "Orbit camera: right drag turns round what you look at, the wheel zooms (Shift+C: back to flying)"
+                                : "Fly camera: right drag turns it where it stands, WASD moves, the wheel goes forward and back (Shift+C: orbit)");
+    }, {}, "orbit fly navigation blender game turntable");
     add("view.workspace", "Workspaces (save the panels as they are)...", "View", "", [this] { showWorkspaces_ = true; }, {}, "layout save panels");
     for (int i = 0; i < 3; ++i)
         add(std::string("view.look") + char('0' + i), std::string("Appearance: ") + (i == 0 ? "like the desktop" : i == 1 ? "dark" : "light"), "View", "",
@@ -743,6 +748,9 @@ auto App::menus() -> void {
         if (ImGui::MenuItem("Frame selected", "F")) frameSelected();
         if (ImGui::MenuItem("Frame everything", "Home")) frameAll();
         if (ImGui::MenuItem("Show only the selected (again: all)", "/", false, !selected_.empty())) showOnly(selected_);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Camera: fly (as in games)", nullptr, fry_camera.i() == 0)) keel::execute("fry_camera 0");
+        if (ImGui::MenuItem("Camera: orbit (as in Blender)", "Shift+C", fry_camera.i() == 1)) keel::execute("fry_camera 1");
         ImGui::Separator();
         commandItem("tools.measure");
         commandItem("view.workspace");
@@ -1997,7 +2005,10 @@ auto App::statusBar() -> void {
             if (t.tool == paintTool_) ImGui::TextDisabled("%s:  %s   ·   Right drag: look   Wheel: forward / back (zoom in the Picture panel)   F1: all keys", t.name, t.hint);
     } else
         for (const ToolInfo& t : kTools)
-            if (t.tool == tool_) ImGui::TextDisabled("%s:  %s   ·   Right drag + WASD: look and move   Alt+right: orbit   Wheel: forward / back   F1: all keys", t.name, t.hint);
+            if (t.tool == tool_)
+                ImGui::TextDisabled("%s:  %s   ·   %s   F1: all keys", t.name, t.hint,
+                                    fry_camera.i() == 1 ? "Right drag: orbit   Middle drag: pan   Wheel: zoom   Shift+C: fly"
+                                                        : "Right drag + WASD: look and move   Alt+right: orbit   Wheel: forward / back   Shift+C: orbit");
     ImGui::End();
 }
 
