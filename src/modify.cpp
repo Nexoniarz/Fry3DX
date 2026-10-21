@@ -153,3 +153,95 @@ Mesh spin(const Mesh& m, const glm::vec3& origin, const glm::vec3& axis, float d
 }
 
 } // namespace fry
+
+namespace fry {
+
+std::vector<glm::vec3> pathOf(const Mesh& m, bool& closed) {
+    closed = false;
+    std::map<std::pair<int, int>, int> count;
+    for (const auto& f : m.faces)
+        if (f.size() == 2) count[{std::min(f[0], f[1]), std::max(f[0], f[1])}] = 1; // (a line's piece)
+        else
+            for (size_t i = 0; i < f.size(); ++i) ++count[{std::min(f[i], f[(i + 1) % f.size()]), std::max(f[i], f[(i + 1) % f.size()])}];
+    std::map<int, std::vector<int>> next;
+    for (const auto& [e, n] : count)
+        if (n == 1 && e.first != e.second) next[e.first].push_back(e.second), next[e.second].push_back(e.first);
+    if (next.empty()) { // (closed all round: the biggest face's outline)
+        int best = -1;
+        float area = 0;
+        for (size_t f = 0; f < m.faces.size(); ++f) {
+            if (m.faces[f].size() < 3) continue;
+            glm::vec3 n(0.0f);
+            const auto& fv = m.faces[f];
+            for (size_t i = 0; i < fv.size(); ++i) n += glm::cross(m.verts[size_t(fv[i])], m.verts[size_t(fv[(i + 1) % fv.size()])]);
+            if (glm::length(n) > area) area = glm::length(n), best = int(f);
+        }
+        std::vector<glm::vec3> out;
+        if (best >= 0)
+            for (int v : m.faces[size_t(best)]) out.push_back(m.verts[size_t(v)]);
+        closed = out.size() >= 3;
+        return out;
+    }
+    // Each run of edges, walked from an end (or anywhere on a loop); the longest kept.
+    std::set<std::pair<int, int>> used;
+    std::vector<glm::vec3> best;
+    bool bestClosed = false;
+    float bestLength = -1;
+    auto walk = [&](int from) {
+        std::vector<int> chain{from};
+        int at = from, prev = -1;
+        bool loop = false;
+        for (;;) {
+            int go = -1;
+            for (int n : next[at])
+                if (n != prev && !used.count({std::min(at, n), std::max(at, n)})) {
+                    go = n;
+                    break;
+                }
+            if (go < 0) break;
+            used.insert({std::min(at, go), std::max(at, go)});
+            if (go == from) {
+                loop = true;
+                break;
+            }
+            chain.push_back(go), prev = at, at = go;
+        }
+        float length = 0;
+        for (size_t i = 1; i < chain.size(); ++i) length += glm::distance(m.verts[size_t(chain[i - 1])], m.verts[size_t(chain[i])]);
+        if (loop) length += glm::distance(m.verts[size_t(chain.back())], m.verts[size_t(from)]);
+        if (chain.size() >= 2 && length > bestLength) {
+            bestLength = length, bestClosed = loop, best.clear();
+            for (int v : chain) best.push_back(m.verts[size_t(v)]);
+        }
+    };
+    for (const auto& [v, ns] : next)
+        if (ns.size() == 1) walk(v); // (ends first: open runs from their start)
+    for (const auto& [v, ns] : next)
+        for (int n : ns)
+            if (!used.count({std::min(v, n), std::max(v, n)})) walk(v);
+    closed = bestClosed;
+    return best;
+}
+
+std::vector<PathPoint> alongPath(const std::vector<glm::vec3>& path, bool closed, int count) {
+    std::vector<PathPoint> out;
+    if (path.size() < 2 || count < 1) return out;
+    std::vector<glm::vec3> p = path;
+    if (closed) p.push_back(path.front());
+    std::vector<float> at(p.size(), 0.0f); // (the length to each point)
+    for (size_t i = 1; i < p.size(); ++i) at[i] = at[i - 1] + glm::distance(p[i - 1], p[i]);
+    const float total = at.back();
+    if (total < 1e-12f) return out;
+    for (int k = 0; k < count; ++k) {
+        const float want = closed ? total * float(k) / float(count) : count == 1 ? 0.0f : total * float(k) / float(count - 1);
+        size_t i = size_t(std::upper_bound(at.begin(), at.end(), want) - at.begin());
+        i = std::clamp<size_t>(i, 1, p.size() - 1);
+        while (i < p.size() - 1 && at[i] - at[i - 1] < 1e-12f) ++i; // (no way along a piece with no length)
+        const float piece = std::max(at[i] - at[i - 1], 1e-12f), t = std::clamp((want - at[i - 1]) / piece, 0.0f, 1.0f);
+        const glm::vec3 d = p[i] - p[i - 1];
+        out.push_back({glm::mix(p[i - 1], p[i], t), glm::length(d) > 1e-12f ? glm::normalize(d) : glm::vec3(1, 0, 0)});
+    }
+    return out;
+}
+
+} // namespace fry

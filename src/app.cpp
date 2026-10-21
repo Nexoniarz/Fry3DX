@@ -421,7 +421,8 @@ public:
         static keel::Cmd copiesCmd("fry_copies", [](const keel::Args& a) { // fry_copies n row dx dy dz | n round angle [joined]
             if (a.size() < 3) return;
             auto& c = self->copies_;
-            c.count = std::stoi(a[1]), c.round = a[2] == "round";
+            c.count = std::stoi(a[1]), c.round = a[2] == "round", c.path = a[2] == "path";
+            c.follow = std::find(a.begin(), a.end(), "still") == a.end();
             if (c.round && a.size() > 3) c.angle = std::stof(a[3]), c.centre = glm::vec3(0.0f);
             if (!c.round && a.size() > 5) c.step = {std::stof(a[3]), std::stof(a[4]), std::stof(a[5])};
             c.joined = a.back() == "joined";
@@ -940,7 +941,7 @@ private:
     std::string captureUri_; // (a picture of the view going into a picked file)
     struct CopiesSetting {
         int count = 3, axis = 2;
-        bool round = false, joined = false;
+        bool round = false, joined = false, path = false, follow = true; // (path: along the last picked object)
         glm::vec3 step{0.3f, 0.0f, 0.0f}, centre{0.0f};
         float angle = 360.0f;
     } copies_;
@@ -3842,21 +3843,45 @@ private:
     void makeCopies() {
         if (mode_ == Mode::Edit) leaveEdit();
         if (selected_.empty()) return say("Pick what to copy first");
-        pushUndo();
         const CopiesSetting& c = copies_;
+        // Along a path: the last one picked is the path (its outline, or its line), the others go along it.
+        std::vector<fry::PathPoint> along;
+        int pathSkip = 0;
+        if (c.path) {
+            const Object* path = find(active_);
+            if (!path || selected_.size() < 2) return say("Pick what to copy, then (Shift) the path last: a drawn shape, a line, a ring...");
+            bool loop = false;
+            Mesh m = path->mesh;
+            transform(m, objectMatrix(*path));
+            const std::vector<glm::vec3> line = fry::pathOf(m, loop);
+            along = fry::alongPath(line, loop, c.count);
+            if (along.empty()) return say("The path has no length to go along");
+            // (one already on the path's start: that's the first, the copies after it)
+            const float near = glm::distance(boundsMin(m), boundsMax(m)) * 1e-3f + 1e-6f;
+            for (uint32_t id : selected_)
+                if (const Object* o = find(id); o && id != active_ && glm::distance(o->position, along[0].at) < near) {
+                    along = fry::alongPath(line, loop, c.count + 1);
+                    pathSkip = 1;
+                    break;
+                }
+        }
+        pushUndo();
         std::set<uint32_t> made = selected_;
         const std::vector<Object> originals = [&] {
             std::vector<Object> v;
             for (const Object& o : scene_.objects)
-                if (selected_.count(o.id)) v.push_back(o);
+                if (selected_.count(o.id) && !(c.path && o.id == active_)) v.push_back(o);
             return v;
         }();
         const glm::vec3 axis = c.axis == 0 ? glm::vec3(1, 0, 0) : c.axis == 1 ? glm::vec3(0, 1, 0) : glm::vec3(0, 0, 1);
         for (const Object& o : originals) {
             Object* joinInto = c.joined ? find(o.id) : nullptr;
-            for (int k = 1; k <= c.count; ++k) {
+            for (int k = c.path ? pathSkip : 1; k <= (c.path ? int(along.size()) - 1 : c.count); ++k) {
                 glm::mat4 T(1.0f);
-                if (c.round) {
+                if (c.path) { // (its middle onto the point; turned as the path turns from its start)
+                    const glm::quat turn = c.follow ? glm::rotation(along[0].along, along[size_t(k)].along) : glm::quat(1, 0, 0, 0);
+                    T = glm::translate(glm::mat4(1.0f), along[size_t(k)].at) * glm::mat4_cast(turn) * glm::translate(glm::mat4(1.0f), -o.position);
+                } else if (c.round) {
                     const float a = glm::radians(c.angle) * float(k) / float(c.angle >= 359.99f ? c.count + 1 : c.count);
                     T = glm::translate(glm::mat4(1.0f), c.centre) * glm::rotate(glm::mat4(1.0f), a, axis) * glm::translate(glm::mat4(1.0f), -c.centre);
                 } else
@@ -3872,14 +3897,16 @@ private:
                 const std::string name = n.name;
                 n = o, n.id = id, n.name = name, n.locked = false;
                 n.position = glm::vec3(T * glm::vec4(o.position, 1.0f));
-                if (c.round) n.rotation = glm::normalize(glm::quat_cast(glm::mat3(T)) * o.rotation);
+                if (c.round || c.path) n.rotation = glm::normalize(glm::quat_cast(glm::mat3(T)) * o.rotation);
                 made.insert(id);
             }
             if (joinInto) changedShape(*joinInto);
         }
         selected_ = made;
         touchAll();
-        say(std::format("{} cop{} of each made{}", c.count, c.count == 1 ? "y" : "ies", c.joined ? ", joined into it" : ""));
+        if (c.path) selected_.erase(active_), active_ = selected_.empty() ? 0 : *selected_.rbegin(); // (the path isn't one of them)
+        const size_t n = c.path ? along.size() - size_t(pathSkip) : size_t(c.count);
+        say(std::format("{} cop{} of each made{}{}", n, n == 1 ? "y" : "ies", c.path ? " along the path" : "", c.joined ? ", joined into it" : ""));
     }
     void copiesWindow() {
         if (!showCopies_) return;
@@ -3889,10 +3916,17 @@ private:
         const float w = 280;
         ImGui::SetNextItemWidth(w);
         ImGui::SliderInt("##count", &c.count, 1, 100, "%d copies");
-        int kind = c.round ? 1 : 0;
+        int kind = c.path ? 2 : c.round ? 1 : 0;
         ImGui::SetNextItemWidth(w);
-        if (ImGui::Combo("##kind", &kind, "In a row\0Round in a circle\0")) c.round = kind == 1;
-        if (!c.round) {
+        if (ImGui::Combo("##kind", &kind, "In a row\0Round in a circle\0Along a path\0")) c.round = kind == 1, c.path = kind == 2;
+        if (c.path) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+            ImGui::TextDisabled("Pick what to copy, then the path last (Shift+click): a drawn shape's outline, a line, a ring. The copies are spread evenly along it.");
+            ImGui::PopTextWrapPos();
+            ImGui::Checkbox("Turn them as the path turns", &c.follow);
+            if (const Object* p = selected_.size() >= 2 ? find(active_) : nullptr) ImGui::TextColored(accentText(), "Path: %s", p->name.c_str());
+            else ImGui::TextColored(roleColor(keel::ui::Role::DangerText), "No path picked yet");
+        } else if (!c.round) {
             glm::vec3 mm = c.step * 1000.0f;
             ImGui::SetNextItemWidth(w);
             if (ImGui::DragFloat3("##step", &mm.x, 1.0f, -1e6f, 1e6f, "%.1f mm")) c.step = mm / 1000.0f;

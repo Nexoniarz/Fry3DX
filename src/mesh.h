@@ -156,6 +156,17 @@ void thicken(Mesh& m, float thickness);
 // edges (or a flat shape's outline) sweep into the walls; a flat shape is its two ends, when the
 // turn doesn't come back round on itself.
 Mesh spin(const Mesh& m, const glm::vec3& origin, const glm::vec3& axis, float degrees, int steps, float rise = 0.0f);
+
+// A shape as a path to put things along: its open edges chained up (the longest run; a flat
+// shape's outline, a line's points), or, a closed solid, its biggest face's outline. `closed`:
+// it comes back round to its start.
+std::vector<glm::vec3> pathOf(const Mesh& m, bool& closed);
+struct PathPoint {
+    glm::vec3 at, along; // (the way the path goes there, unit length)
+};
+// `count` points evenly spaced along it by length (ends included on an open one; on a closed one
+// the last isn't on top of the first).
+std::vector<PathPoint> alongPath(const std::vector<glm::vec3>& path, bool closed, int count);
 // Two shapes (in the same space) made one: `b` added to `a`, taken out of it, or only where they
 // overlap kept. The result goes in `a`; false if nothing's left.
 enum class Combine { Add, Subtract, Overlap };

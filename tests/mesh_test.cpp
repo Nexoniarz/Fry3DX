@@ -709,6 +709,29 @@ int main() {
         CHECK(!held.empty() && std::abs(boundsMax(g).z - 0.8f) < 0.01f && closed(g), "grab pulls the middle up with it (%.3f)", boundsMax(g).z);
     }
 
+    { // copies along a path: a square's outline, a line, a cube's biggest face
+        Mesh sq;
+        sq.verts = {{0, 0, 0}, {2, 0, 0}, {2, 2, 0}, {0, 2, 0}};
+        sq.faces = {{0, 1, 2, 3}};
+        bool loop = false;
+        const auto p = pathOf(sq, loop);
+        const auto pts = alongPath(p, loop, 8);
+        bool even = pts.size() == 8;
+        for (size_t i = 0; i < pts.size() && even; ++i) even = glm::distance(pts[i].at, pts[(i + 1) % pts.size()].at) > 0.99f && glm::distance(pts[i].at, pts[(i + 1) % pts.size()].at) < 1.42f;
+        CHECK(loop && p.size() == 4 && even, "a square's outline is a closed path, 8 points 1 apart round it");
+        Mesh line;
+        line.verts = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {1, 1, 0}, {3, 1, 0}};
+        line.faces = {{0, 1}, {1, 2}, {3, 4}, {2, 3}};
+        const auto lp = pathOf(line, loop);
+        const auto lpts = alongPath(lp, loop, 5);
+        CHECK(!loop && lp.size() == 5 && lpts.size() == 5 && glm::distance(lpts.front().at, glm::vec3(0)) < 1e-5f && glm::distance(lpts.back().at, glm::vec3(3, 1, 0)) < 1e-5f &&
+                  std::abs(lpts[2].at.x - 1) < 1e-5f && std::abs(lpts[2].at.y - 1) < 1e-5f && lpts[4].along == glm::vec3(1, 0, 0),
+              "a line (a piece with no length in it): open, both ends, the middle at its corner, going its way");
+        const auto cp = pathOf(makeCube(1.0f), loop);
+        CHECK(loop && cp.size() == 4, "a closed box: its biggest face's outline");
+        CHECK(alongPath({}, false, 4).empty() && alongPath({glm::vec3(1), glm::vec3(1)}, false, 3).empty(), "no path, or one with no length: nothing");
+    }
+
     std::printf("%s (%d failure%s)\n", g_failures ? "FAILED" : "passed", g_failures, g_failures == 1 ? "" : "s");
     return g_failures ? 1 : 0;
 }
