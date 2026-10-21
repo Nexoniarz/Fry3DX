@@ -5555,10 +5555,30 @@ private:
 
     // (the Print tab's: the printer's plate and overhangs)
     // On top of the scene: outlines and wires, points, the gizmo, the selection shapes.
+    // An empty scene: how to start, in the middle of the view (gone once there's anything).
+    void emptyHints(ImDrawList* dl) {
+        if (!scene_.objects.empty() || capturing() || tab_ != Tab::Model) return;
+        const char* lines[] = {touch() ? "Nothing here yet: tap + to add a shape" : "Nothing here yet: Add (menu) for a shape, or draw one (D)",
+                               touch() ? "Hold a finger on the view for more" : "F3 or Ctrl+Space: find any command by name",
+                               touch() ? "" : "Space: tools round the mouse    Shift+Space: views",
+                               touch() ? "" : "File > Import: STL, OBJ, 3MF, glTF from elsewhere"};
+        const float lh = ImGui::GetTextLineHeightWithSpacing() * 1.25f;
+        float y = (viewMin_.y + viewMax_.y) * 0.5f - lh * 2, widest = 0;
+        int shown = 0;
+        for (const char* l : lines) widest = std::max(widest, ImGui::CalcTextSize(l).x), shown += *l != 0;
+        const float cx = (viewMin_.x + viewMax_.x) * 0.5f;
+        dl->AddRectFilled(ImVec2(cx - widest * 0.5f - 18, y - 12), ImVec2(cx + widest * 0.5f + 18, y + lh * float(shown) + 6), IM_COL32(28, 28, 32, 200), 8.0f);
+        for (int i = 0; i < 4; ++i, y += lh) {
+            if (!*lines[i]) continue;
+            const ImVec2 size = ImGui::CalcTextSize(lines[i]);
+            dl->AddText(ImVec2((viewMin_.x + viewMax_.x - size.x) * 0.5f, y), i == 0 ? IM_COL32(230, 230, 235, 200) : IM_COL32(200, 200, 205, 130), lines[i]);
+        }
+    }
     void overlays() {
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         dl->PushClipRect(viewMin_, viewMax_);
         const ImGuiIO& io = ImGui::GetIO();
+        emptyHints(dl);
         // Every edge of a mesh (X-ray, wireframe), or just the edges the eye can see.
         auto lines = [&](const Object& o, const Mesh& mesh, ImU32 col, float width, bool seenOnly) {
             const glm::mat4 m = objectMatrix(o);
