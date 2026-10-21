@@ -175,4 +175,20 @@ Repair repairForPrint(Mesh& m) {
     return r;
 }
 
+std::vector<std::pair<glm::vec3, glm::vec3>> sliceAt(const Mesh& m, float z) {
+    std::vector<std::pair<glm::vec3, glm::vec3>> out;
+    for (size_t f = 0; f < m.faces.size(); ++f)
+        for (const auto& t : triangulate(m, int(f))) { // (a triangle crosses it twice or not at all; a dented face can more)
+            glm::vec3 at[2];
+            int n = 0;
+            for (int i = 0; i < 3; ++i) {
+                const glm::vec3 a = m.verts[size_t(t[size_t(i)])], b = m.verts[size_t(t[size_t((i + 1) % 3)])];
+                const float da = a.z - z, db = b.z - z;
+                if ((da < 0) != (db < 0) && n < 2) at[n++] = glm::mix(a, b, da / (da - db));
+            }
+            if (n == 2) out.push_back({at[0], at[1]});
+        }
+    return out;
+}
+
 } // namespace fry

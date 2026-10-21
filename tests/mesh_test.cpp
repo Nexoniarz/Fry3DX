@@ -449,6 +449,13 @@ int main() {
         CHECK(checkForPrint(o).closed() && checkForPrint(o).volume < 0.05f * 0.04f * 0.01f, "an O has its hole (%g m3)", checkForPrint(o).volume);
         CHECK(makeText({}, "x", st, &err).faces.empty() && !err.empty(), "no font: nothing, and why");
     }
+    // A slicer's layer: a 1 m cube cut halfway is a 4 m outline, a cylinder's a circle's.
+    {
+        float len = 0;
+        for (const auto& [a, b] : sliceAt(makeCube(1.0f), 0.1f)) len += glm::distance(a, b);
+        CHECK(std::abs(len - 4.0f) < 1e-4f, "a cube's slice: 4 m round (%.4f)", len);
+        CHECK(sliceAt(makeCube(1.0f), 2.0f).empty(), "above it: nothing");
+    }
     // Wall thickness: a box 2 mm thin one way is 2 mm thick on its big faces, 1 m the other ways.
     {
         Mesh slab = makeCube(1.0f);

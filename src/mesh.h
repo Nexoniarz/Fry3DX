@@ -178,6 +178,9 @@ bool overhangs(const Mesh& m, int face, float overhang, float bedZ);
 int closeHoles(Mesh& m);
 // Turns faces so each piece's all face the same way, outwards; how many were turned.
 int faceOutward(Mesh& m);
+// Where a level plane at height z cuts the shape: the pieces of its outline there (a slicer's
+// layer), each from one face.
+std::vector<std::pair<glm::vec3, glm::vec3>> sliceAt(const Mesh& m, float z);
 // Made ready to print, as far as it can be without guessing: points in the same place joined (an
 // STL's corners come apart), faces with no area gone, faces there twice once (back to back: both
 // gone, an inside wall), faces turned the same way, holes closed. What it did.

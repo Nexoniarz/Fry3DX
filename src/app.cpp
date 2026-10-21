@@ -256,6 +256,10 @@ struct PrintInfo {
     int thinFaces = 0;
     float thinnest = 1e30f;
     keel::ModelId thin{};
+    // The slice preview's layer: where it was cut, and for which shape (kept beside what it's of).
+    mutable uint64_t sliceKey = ~0ull;
+    mutable float sliceZ = -1;
+    mutable std::vector<std::pair<glm::vec3, glm::vec3>> slice;
 };
 
 keel::Cvar fry_printer("fry_printer", "0", keel::CVAR_ARCHIVE, "Fry3DX: the 3D printer (a number in the Print tab's list)");
@@ -525,6 +529,7 @@ public:
         static keel::Cmd print("fry_print", [](const keel::Args& a) {
             if (a.size() < 2) return;
             if (a[1] == "bed") self->putOnBed();
+            if (a[1] == "layer" && a.size() > 2) self->showLayer_ = true, self->layer_ = std::stoi(a[2]);
             if (a[1] == "middle") self->middleOfBed();
             if (a[1] == "printer" && a.size() > 2) keel::execute("fry_printer " + a[2]);
             if (a[1] == "size" && a.size() > 3) self->pushUndo(), self->printResize(std::stoi(a[2]), std::stof(a[3]));
@@ -938,7 +943,9 @@ private:
     // The Print tab.
     PrintTool printTool_ = PrintTool::None;
     std::vector<glm::vec3> measure_;
-    bool measureSnap_ = true, showOverhangs_ = true, sizing_ = false, showThin_ = true;
+    bool measureSnap_ = true, showOverhangs_ = true, sizing_ = false, showThin_ = true, showLayer_ = false;
+    int layer_ = 1;
+    float layerHeight_ = 0.0002f; // (m)
     float minWall_ = 0.0008f; // (m: the thinnest wall that prints well, twice a 0.4 mm nozzle)
     float overhangDeg_ = 45.0f, infill_ = 15.0f;
     int material_ = 0;
@@ -3303,6 +3310,18 @@ private:
             if (const float t = -ray.origin.z / ray.dir.z; t > 0) return ray.origin + ray.dir * t;
         return std::nullopt;
     }
+    // The slice preview: where the printer goes round at the chosen layer, over the model.
+    void layerOverlay(ImDrawList* dl) {
+        const float z = (float(layer_) - 0.5f) * layerHeight_;
+        for (Object* o : printTargets()) {
+            const PrintInfo& p = printInfo(*o);
+            if (p.sliceKey != p.key || p.sliceZ != z) p.sliceKey = p.key, p.sliceZ = z, p.slice = fry::sliceAt(p.world, z);
+            for (const auto& [a, b] : p.slice) {
+                ImVec2 sa, sb;
+                if (project(a, sa) && project(b, sb)) dl->AddLine(sa, sb, IM_COL32(60, 220, 255, 255), 2.5f);
+            }
+        }
+    }
     void printOverlay(ImDrawList* dl, const ImGuiIO& io) {
         if (printTool_ != PrintTool::Measure) return;
         std::vector<glm::vec3> pts = measure_;
@@ -3433,6 +3452,21 @@ private:
         if (ImGui::SliderFloat("##minwall", &mm, 0.2f, 5.0f, "thinner than %.1f mm")) minWall_ = mm / 1000;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The thinnest wall your printer makes well: about twice the nozzle (0.8 mm for a 0.4 mm nozzle)");
 
+        ImGui::SeparatorText("Layers");
+        {
+            const int layers = std::max(1, int(std::ceil((hi.z - std::max(lo.z, 0.0f)) / layerHeight_ - 1e-4f)));
+            ImGui::Checkbox("Show one layer (as the printer makes it)", &showLayer_);
+            if (showLayer_) {
+                layer_ = std::clamp(layer_, 1, layers);
+                ImGui::SetNextItemWidth(w);
+                ImGui::SliderInt("##layer", &layer_, 1, layers, std::format("layer %d of {}", layers).c_str());
+                float mm = layerHeight_ * 1000;
+                ImGui::SetNextItemWidth(w);
+                if (ImGui::SliderFloat("##lh", &mm, 0.04f, 0.6f, "%.2f mm a layer")) layerHeight_ = std::max(mm, 0.01f) / 1000;
+                ImGui::TextDisabled("At %.2f mm up", (float(layer_) - 0.5f) * layerHeight_ * 1000);
+            } else
+                ImGui::TextDisabled("%d layers of %.2f mm", layers, layerHeight_ * 1000);
+        }
         ImGui::SeparatorText("Material");
         ImGui::SetNextItemWidth(w);
         ImGui::Combo("##material", &material_, [](void*, int i) { return kMaterials[i].name; }, nullptr, int(std::size(kMaterials)));
@@ -5746,6 +5780,7 @@ private:
             return;
         }
         if ((tab_ == Tab::Print || printTool_ == PrintTool::Measure) && !clean) printOverlay(dl, io);
+        if (tab_ == Tab::Print && showLayer_ && !clean) layerOverlay(dl);
         if (clean) {
             dl->PopClipRect();
             return;
