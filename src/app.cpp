@@ -563,6 +563,7 @@ public:
                 Object* o = self->editing();
                 if (!o) return;
                 self->pushUndo();
+                const Mesh before = o->mesh;
                 self->drag_.soft.clear();
                 if (self->softSel_) self->findSoft();
                 const glm::mat4 m = objectMatrix(*o);
@@ -570,6 +571,7 @@ public:
                 for (int v : self->selectedPoints()) o->mesh.verts[size_t(v)] = glm::vec3(local * glm::vec4(o->mesh.verts[size_t(v)], 1.0f));
                 for (const auto& [v, w] : self->drag_.soft) o->mesh.verts[size_t(v)] = glm::mix(o->mesh.verts[size_t(v)], glm::vec3(local * glm::vec4(o->mesh.verts[size_t(v)], 1.0f)), w);
                 self->drag_.soft.clear();
+                if (self->liveMirror_) self->mirrorEdits(*o, before);
                 self->changedShape(*o, true);
             } else if (a[1] == "soft") self->softSel_ = a.size() < 3 || a[2] != "0", self->softReach_ = a.size() > 3 ? std::stof(a[3]) : self->softReach_;
         }, "Fry3DX: shape editing: fry_shapeop smooth | bridge | push metres | soft 1 [reach] | move x y z");
@@ -4744,6 +4746,39 @@ private:
     }
 
     void updateDrag(const ImGuiIO& io) {
+        dragNow(io);
+        if (liveMirror_ && mode_ == Mode::Edit)
+            if (Object* o = editing())
+                for (const Object& b : drag_.before.objects)
+                    if (b.id == o->id) mirrorEdits(*o, b.mesh);
+    }
+    // Mirror editing: each point that moved, its twin across the shape's own X (the point that was
+    // where it is, mirrored) moved the mirrored way. Points on the middle stay on it.
+    void mirrorEdits(Object& o, const Mesh& before) {
+        if (before.verts.size() != o.mesh.verts.size() || before.verts.empty()) return; // (points made or gone: nothing to match)
+        const float tol = std::max(glm::length(boundsMax(before) - boundsMin(before)) * 1e-5f, 1e-7f);
+        auto key = [&](const glm::vec3& p) {
+            const glm::ivec3 c(glm::round(p / tol));
+            return (uint64_t(uint32_t(c.x) & 0x1FFFFF) << 42) | (uint64_t(uint32_t(c.y) & 0x1FFFFF) << 21) | uint64_t(uint32_t(c.z) & 0x1FFFFF);
+        };
+        std::unordered_map<uint64_t, int> at;
+        for (size_t i = 0; i < before.verts.size(); ++i) at.emplace(key(before.verts[i]), int(i));
+        std::vector<char> moved(before.verts.size());
+        for (size_t i = 0; i < moved.size(); ++i) moved[i] = glm::distance(before.verts[i], o.mesh.verts[i]) > tol * 0.01f;
+        for (size_t i = 0; i < moved.size(); ++i) {
+            if (!moved[i]) continue;
+            const glm::vec3 b = before.verts[i];
+            if (std::abs(b.x) <= tol) { // (on the middle)
+                o.mesh.verts[i].x = 0;
+                continue;
+            }
+            const auto it = at.find(key(glm::vec3(-b.x, b.y, b.z)));
+            if (it == at.end() || moved[size_t(it->second)]) continue; // (no twin, or it's moved by hand too)
+            const glm::vec3 n = o.mesh.verts[i];
+            o.mesh.verts[size_t(it->second)] = glm::vec3(-n.x, n.y, n.z);
+        }
+    }
+    void dragNow(const ImGuiIO& io) {
         const Ray ray = mouseRay(io.MousePos);
         const bool snapping = snap_ != io.KeyCtrl; // Ctrl flips snapping while held
         scene_ = drag_.before; // every frame from where it started: no drift
@@ -5932,7 +5967,7 @@ private:
         add("shape.soft", "Soft selection on / off", "Shape", "Shift+O", [this] { softSel_ = !softSel_; }, {}, "proportional falloff");
         add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
         add("shape.slide", "Slide the points along their edges...", "Shape", "Alt+G", [this] { startSlide(); }, editing, "edge slide vertex slide");
-        add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_; }, {}, "symmetry symmetric x");
+        add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_, say(liveMirror_ ? "Mirror editing on: both sides change together" : "Mirror editing off"); }, {}, "symmetry symmetric x");
         add("view.solid", "Show: solid", "View", "Z", [this] { shading_ = Shading::Solid; });
         add("view.rendered", "Show: rendered (sky, sun, shadows)", "View", "Z", [this] { shading_ = Shading::Rendered; });
         add("view.wire", "Show: wireframe", "View", "Shift+Z", [this] { shading_ = Shading::Wire; });
@@ -6498,6 +6533,8 @@ private:
     void softChoice(float w) {
         if (mode_ != Mode::Edit) return;
         ImGui::Checkbox("Soft selection (Shift+O)", &softSel_);
+        ImGui::Checkbox("Mirror editing (across X)", &liveMirror_);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("A symmetric shape stays so: move a point, its twin on the other side moves too");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Points near the selection follow it, less the further they are");
         if (!softSel_) return;
         ImGui::SetNextItemWidth(w);
@@ -7928,6 +7965,7 @@ private:
                 if (to >= 0) o->mesh.verts[size_t(slide_.pts[i])] = glm::mix(p, slide_.from.verts[size_t(to)], t), shown = std::max(shown, t);
             }
         }
+        if (liveMirror_) mirrorEdits(*o, slide_.from);
         touched(o->id);
         message_ = std::format("Sliding {:.0f}% of the way along (click: keep, Esc: as it was)", shown * 100), messageAt_ = now();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
