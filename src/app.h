@@ -1240,7 +1240,7 @@ private:
     // ───────────────────────────── commands ─────────────────────────────
 
     // Everything that can be done, by name: for the command search, keys of your own, the pies.
-    void buildCommands();    void openSearch();    void runCommand(const std::string& id);    void commandSearch();
+    void buildCommands();    void openSearch();    void runCommand(const std::string& id); void commandItem(const char* id);    void commandSearch();
     // The pies: the tools (Space), or the views (Shift+Space), round the mouse while it's held.
     void pieFrame(ImGuiIO& io);
     // Keys of your own: kept in keys.txt (a line each: the command's id, a tab, the key).

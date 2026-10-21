@@ -551,6 +551,17 @@ auto App::runCommand(const std::string& id) -> void {
         }
 }
 
+// A menu item for a command: its name, its key (your own if you gave it one), greyed when it can't be done now.
+auto App::commandItem(const char* id) -> void {
+    for (const fry::Command& c : commands_)
+        if (c.id == id) {
+            const auto mine = myKeys_.find(c.id);
+            const std::string keys = mine != myKeys_.end() ? fry::chordName(mine->second) : c.keys;
+            if (ImGui::MenuItem(c.name.c_str(), keys.empty() ? nullptr : keys.c_str(), false, c.usable())) runCommand(c.id);
+            return;
+        }
+}
+
 auto App::commandSearch() -> void {
     if (!search_.open) return;
     if (const int i = search_.draw(commands_, recentCommands_); i >= 0) runCommand(commands_[size_t(i)].id);
@@ -623,6 +634,7 @@ auto App::menus() -> void {
     if (ImGui::BeginMenu("Edit")) {
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, !undo_.empty())) undo();
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, !redo_.empty())) redo();
+        commandItem("edit.history");
         ImGui::Separator();
         if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, mode_ == Mode::Object)) duplicateSelected();
         if (ImGui::MenuItem("Join into one", "Ctrl+J", false, mode_ == Mode::Object && selected_.size() > 1)) joinSelected();
@@ -640,6 +652,9 @@ auto App::menus() -> void {
         if (ImGui::MenuItem("More (grow)", "Ctrl +")) growSelection();
         if (ImGui::MenuItem("Less (shrink)", "Ctrl -")) shrinkSelection();
         if (ImGui::MenuItem("Everything joined to it", "L")) selectLinked();
+        commandItem("select.similar");
+        commandItem("select.loop");
+        commandItem("select.ring");
         ImGui::MenuItem("A loop: Alt+click or double-click", nullptr, false, false);
         ImGui::EndDisabled();
         ImGui::Separator();
@@ -669,6 +684,7 @@ auto App::menus() -> void {
         if (ImGui::MenuItem("Join (just as they are)", "Ctrl+J", false, many)) joinSelected();
         ImGui::Separator();
         if (ImGui::MenuItem("Make it thick (or hollow)...", nullptr, false, any)) showThicken_ = true;
+        commandItem("object.spin");
         if (ImGui::MenuItem("Join flat faces side by side", nullptr, false, any)) cleanFlatFaces();
         pluginMenuItems("object");
         ImGui::EndMenu();
@@ -692,6 +708,11 @@ auto App::menus() -> void {
         if (ImGui::MenuItem("Push out / pull in...", "Alt+S")) startPush();
         if (ImGui::MenuItem("Bridge two faces")) bridgeNow();
         ImGui::MenuItem("Soft selection", "Shift+O", &softSel_);
+        ImGui::EndDisabled();
+        commandItem("shape.crease");
+        commandItem("shape.slide");
+        commandItem("shape.mirror");
+        ImGui::BeginDisabled(!ed);
         if (ImGui::MenuItem("Make into its own object", "P")) separateSelected();
         if (ImGui::MenuItem("Delete", "Del")) deleteElements();
         ImGui::EndDisabled();
@@ -722,6 +743,9 @@ auto App::menus() -> void {
         if (ImGui::MenuItem("Frame selected", "F")) frameSelected();
         if (ImGui::MenuItem("Frame everything", "Home")) frameAll();
         if (ImGui::MenuItem("Show only the selected (again: all)", "/", false, !selected_.empty())) showOnly(selected_);
+        ImGui::Separator();
+        commandItem("tools.measure");
+        commandItem("view.workspace");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Script")) {
@@ -755,6 +779,7 @@ auto App::menus() -> void {
     }
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("Keys and mouse", "F1")) showHelp_ = true;
+        commandItem("help.search");
         if (ImGui::MenuItem("About Fry3DX")) showAbout_ = true;
         ImGui::EndMenu();
     }
@@ -813,6 +838,7 @@ auto App::addMenuItems() -> void {
         setTool(Tool::Draw);
     }
     if (ImGui::MenuItem("Reference picture...")) dialog(4);
+    commandItem("add.text");
 }
 
 // How the last item's key looks: filled when it's the one in use, sunk while held.
@@ -917,7 +943,7 @@ auto App::toolbox() -> void {
                 for (const fry::PluginTool& t : plugins_[i].p->tools) {
                     if (std::exchange(first, false)) ImGui::SeparatorText("Plug-in tools");
                     const bool on = pluginTool_ == std::pair(plugins_[i].file, t.name);
-                    if (ImGui::Selectable(std::format("{}##{}", t.name, plugins_[i].file).c_str(), on, 0, ImVec2(w, 0)))
+                    if (ImGui::Selectable(std::format("{}##{}", t.name, plugins_[i].file).c_str(), on, 0, ImVec2(w, touch() ? 34.0f : 0.0f)))
                         on ? setTool(Tool::Select) : void((pluginTool_ = {plugins_[i].file, t.name}, tool_ = Tool::Select, say(t.name + ": click in the view (Esc stops)")));
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s(%s)", t.help.c_str(), t.help.empty() ? "" : "\n", plugins_[i].p->name.c_str());
                 }
