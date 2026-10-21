@@ -119,4 +119,60 @@ int faceOutward(Mesh& m) {
     return turned;
 }
 
+Repair repairForPrint(Mesh& m) {
+    Repair r;
+    if (m.verts.empty()) return r;
+    // (how near is "the same place": a millionth of its size, a micron at least)
+    const float size = glm::length(boundsMax(m) - boundsMin(m));
+    const size_t before = m.verts.size(), faces = m.faces.size();
+    mergeByDistance(m, std::max(size * 1e-6f, 1e-6f)); // (it drops faces left with fewer than three points: counted below)
+    r.joinedPoints = int(before - m.verts.size());
+    // Faces with a point twice in a row, fewer than three points, or no area.
+    const float tiny = std::max(size * size * 1e-12f, 1e-16f);
+    for (auto& f : m.faces) {
+        f.erase(std::unique(f.begin(), f.end()), f.end());
+        while (f.size() > 1 && f.front() == f.back()) f.pop_back();
+    }
+    std::erase_if(m.faces, [&](const std::vector<int>& f) { return f.size() < 3; });
+    for (size_t i = m.faces.size(); i-- > 0;)
+        if (faceArea(m, int(i)) <= tiny) m.faces.erase(m.faces.begin() + std::ptrdiff_t(i));
+    r.emptyFaces = int(faces - m.faces.size());
+    // The same face twice: once. Back to back (the same points, the other way round): neither.
+    std::map<std::vector<int>, std::vector<size_t>> same;
+    for (size_t i = 0; i < m.faces.size(); ++i) {
+        std::vector<int> key = m.faces[i];
+        std::sort(key.begin(), key.end());
+        same[key].push_back(i);
+    }
+    std::vector<char> drop(m.faces.size(), 0);
+    auto turn = [](const std::vector<int>& f) { // (the face started at its lowest point: two that turn the same way match)
+        std::vector<int> g = f;
+        std::rotate(g.begin(), std::min_element(g.begin(), g.end()), g.end());
+        return g;
+    };
+    for (const auto& [key, list] : same) {
+        if (list.size() < 2) continue;
+        int ways = 0, other = 0;
+        const std::vector<int> first = turn(m.faces[list[0]]);
+        for (size_t i : list) (turn(m.faces[i]) == first ? ways : other)++;
+        if (ways == other) // (back to back: an inside wall)
+            for (size_t i : list) drop[i] = 1;
+        else
+            for (size_t k = 1; k < list.size(); ++k) drop[list[k]] = 1;
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < m.faces.size(); ++i)
+        if (!drop[i]) {
+            if (at != i) m.faces[at] = std::move(m.faces[i]); // (not onto itself: that empties it)
+            ++at;
+        }
+    r.doubledFaces = int(m.faces.size() - at);
+    m.faces.resize(at);
+    removeUnused(m);
+    r.turnedFaces = faceOutward(m);
+    r.closedHoles = closeHoles(m);
+    if (r.closedHoles) r.turnedFaces += faceOutward(m);
+    return r;
+}
+
 } // namespace fry

@@ -14,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <fstream>
@@ -364,6 +365,46 @@ int main() {
         transform(drill, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -1.5f)));
         CHECK(combine(a, drill, Combine::Subtract) && checkForPrint(a).closed() && checkForPrint(a).volume < 1.0f && checkForPrint(a).volume > 0.85f,
               "a cylinder drilled through a cube: closed, %g m3", checkForPrint(a).volume);
+    }
+    // Joining points is quick on a big mesh: a sphere in loose triangles, as an STL brings it.
+    {
+        const Mesh sphere = makeSphere(200, 100, 1.0f);
+        Mesh soup;
+        for (size_t f = 0; f < sphere.faces.size(); ++f)
+            for (const auto& t : triangulate(sphere, int(f))) {
+                soup.faces.push_back({int(soup.verts.size()), int(soup.verts.size()) + 1, int(soup.verts.size()) + 2});
+                for (int v : t) soup.verts.push_back(sphere.verts[size_t(v)]);
+            }
+        const size_t loose = soup.verts.size();
+        const auto t0 = std::chrono::steady_clock::now();
+        mergeByDistance(soup, 1e-6f);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(soup.verts.size() == sphere.verts.size() && ms < 3000, "%zu loose points joined to %zu in %.0f ms", loose, soup.verts.size(), ms);
+    }
+    // Repair: a cube as an STL brings it (each face its own corners), one face missing, one
+    // turned in, one there twice, an inside wall: closed and the right way out after.
+    {
+        const Mesh good = makeCube(1.0f);
+        Mesh bad;
+        for (size_t f = 0; f < good.faces.size(); ++f) {
+            if (f == 2) continue; // (missing)
+            std::vector<int> face;
+            for (int v : good.faces[f]) face.push_back(int(bad.verts.size())), bad.verts.push_back(good.verts[size_t(v)] + glm::vec3(f == 4 ? 1e-8f : 0.0f));
+            if (f == 3) std::reverse(face.begin(), face.end()); // (turned in)
+            bad.faces.push_back(face);
+            if (f == 5) bad.faces.push_back(face); // (twice)
+        }
+        bad.faces.push_back({0, 1, 1}); // (no area)
+        const int a = int(bad.verts.size());
+        bad.verts.insert(bad.verts.end(), {{-0.5f, 0, -0.5f}, {0.5f, 0, -0.5f}, {0.5f, 0, 0.5f}, {-0.5f, 0, 0.5f}});
+        bad.faces.push_back({a, a + 1, a + 2, a + 3}), bad.faces.push_back({a + 3, a + 2, a + 1, a}); // (an inside wall, back to back)
+        CHECK(!checkForPrint(bad).closed(), "the broken cube is broken");
+        const Repair r = repairForPrint(bad);
+        const PrintCheck c = checkForPrint(bad);
+        CHECK(c.closed() && !c.insideOut && std::abs(c.volume - 1.0f) < 1e-4f && r.closedHoles == 1 && r.doubledFaces == 3 && r.emptyFaces == 1 && r.joinedPoints > 0,
+              "repair: closed, outwards, 1 m3 (joined %d, empty %d, doubled %d, turned %d, holes %d)", r.joinedPoints, r.emptyFaces, r.doubledFaces, r.turnedFaces, r.closedHoles);
+        Mesh fine = makeCube(1.0f);
+        CHECK(repairForPrint(fine).total() == 0 && fine.faces == good.faces, "a good cube: nothing to repair");
     }
     // Spin: a square beside the axis turned all the way round is a ring (Pappus: its area times
     // how far its middle goes); a quarter turn has ends; a screw rises.

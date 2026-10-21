@@ -4,6 +4,7 @@
 #include <cmath>
 #include <map>
 #include <numeric>
+#include <unordered_map>
 
 namespace fry {
 
@@ -376,13 +377,24 @@ bool makeFace(Mesh& m, const std::vector<int>& verts, const glm::vec3& towards) 
 int mergeByDistance(Mesh& m, float distance) {
     std::vector<int> to(m.verts.size(), -1);
     std::vector<glm::vec3> kept;
+    // (kept points in a grid of cubes `distance` big: one is looked for in its own and the 26
+    // round it, not among all of them; an imported STL has hundreds of thousands)
+    const float cell = std::max(distance, 1e-9f);
+    auto cellOf = [&](const glm::vec3& p) { return glm::ivec3(glm::floor(p / cell)); };
+    auto key = [](glm::ivec3 c) { return (uint64_t(uint32_t(c.x) & 0x1FFFFF) << 42) | (uint64_t(uint32_t(c.y) & 0x1FFFFF) << 21) | uint64_t(uint32_t(c.z) & 0x1FFFFF); };
+    std::unordered_map<uint64_t, std::vector<int>> grid;
+    grid.reserve(m.verts.size());
     for (size_t v = 0; v < m.verts.size(); ++v) {
-        for (size_t k = 0; k < kept.size(); ++k)
-            if (glm::distance(kept[k], m.verts[v]) <= distance) {
-                to[v] = int(k);
-                break;
-            }
-        if (to[v] < 0) to[v] = int(kept.size()), kept.push_back(m.verts[v]);
+        const glm::ivec3 c = cellOf(m.verts[v]);
+        int best = -1;
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dz = -1; dz <= 1; ++dz)
+                    if (auto it = grid.find(key(c + glm::ivec3(dx, dy, dz))); it != grid.end())
+                        for (int k : it->second)
+                            if ((best < 0 || k < best) && glm::distance(kept[size_t(k)], m.verts[v]) <= distance) best = k; // (the first kept, as before)
+        if (best < 0) best = int(kept.size()), kept.push_back(m.verts[v]), grid[key(c)].push_back(best);
+        to[v] = best;
     }
     const int gone = int(m.verts.size() - kept.size());
     remapFaces(m, to);

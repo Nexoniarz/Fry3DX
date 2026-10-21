@@ -3334,6 +3334,12 @@ private:
         }
 
         ImGui::SeparatorText("Ready to print?");
+        if (!all.closed() || all.insideOut || all.tinyFaces) {
+            pushAccent();
+            if (ImGui::Button("Repair it (all at once)", ImVec2(w, 0))) repairSelected();
+            popAccent();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Joins loose corners, takes away empty and doubled faces, turns faces outwards, closes holes");
+        }
         if (all.openEdges) {
             bad(std::format("Not closed: {} edges have a face on one side only (holes). A slicer may fill them wrongly or not print it.", all.openEdges));
             if (ImGui::Button("Close the holes", ImVec2(w, 0))) {
@@ -7824,7 +7830,36 @@ private:
 
     // ── (being made) ──
     bool showPrintSize_ = false, liveMirror_ = false;
-    void repairSelected() {}
+    // Each picked object (or all, in the Print tab with none picked) made ready to print.
+    void repairSelected() {
+        std::vector<Object*> targets;
+        if (tab_ == Tab::Print) targets = printTargets();
+        else
+            for (Object& o : scene_.objects)
+                if (selected_.count(o.id)) targets.push_back(&o);
+        std::erase_if(targets, [](const Object* o) { return o->locked; });
+        if (targets.empty()) return say("Pick what to repair first");
+        if (mode_ == Mode::Edit) leaveEdit();
+        pushUndo();
+        fry::Repair all;
+        int still = 0;
+        for (Object* o : targets) {
+            const fry::Repair r = fry::repairForPrint(o->mesh);
+            all.joinedPoints += r.joinedPoints, all.emptyFaces += r.emptyFaces, all.doubledFaces += r.doubledFaces, all.turnedFaces += r.turnedFaces, all.closedHoles += r.closedHoles;
+            if (r.total()) handMade(*o), touched(o->id);
+            still += !checkForPrint(o->mesh).closed();
+        }
+        if (!all.total()) return takeBack(), say(still ? "Nothing it can repair by itself: look at what the Print tab says" : "Nothing to repair: ready to print");
+        std::vector<std::string> did;
+        if (all.joinedPoints) did.push_back(std::format("{} points joined", all.joinedPoints));
+        if (all.emptyFaces) did.push_back(std::format("{} empty faces gone", all.emptyFaces));
+        if (all.doubledFaces) did.push_back(std::format("{} doubled faces gone", all.doubledFaces));
+        if (all.turnedFaces) did.push_back(std::format("{} faces turned out", all.turnedFaces));
+        if (all.closedHoles) did.push_back(std::format("{} holes closed", all.closedHoles));
+        std::string text;
+        for (const std::string& d : did) text += (text.empty() ? "" : ", ") + d;
+        say("Repaired: " + text + (still ? std::format(". {} still not closed (see the Print tab)", still) : ". Ready to print"));
+    }
     void startSlide() {}
 
     std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }

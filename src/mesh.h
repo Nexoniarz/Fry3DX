@@ -178,6 +178,14 @@ bool overhangs(const Mesh& m, int face, float overhang, float bedZ);
 int closeHoles(Mesh& m);
 // Turns faces so each piece's all face the same way, outwards; how many were turned.
 int faceOutward(Mesh& m);
+// Made ready to print, as far as it can be without guessing: points in the same place joined (an
+// STL's corners come apart), faces with no area gone, faces there twice once (back to back: both
+// gone, an inside wall), faces turned the same way, holes closed. What it did.
+struct Repair {
+    int joinedPoints = 0, emptyFaces = 0, doubledFaces = 0, turnedFaces = 0, closedHoles = 0;
+    int total() const { return joinedPoints + emptyFaces + doubledFaces + turnedFaces + closedHoles; }
+};
+Repair repairForPrint(Mesh& m);
 
 // ── Its picture's layout ──
 
