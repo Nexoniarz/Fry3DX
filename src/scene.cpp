@@ -224,7 +224,7 @@ std::string sceneText(const Scene& scene) {
     for (const SceneScript& s : scene.scripts) out << "script " << quoted(s.name) << " " << s.code.size() << "\n" << s.code << "\n";
     for (const Reference& r : scene.references)
         out << "reference " << quoted(r.path) << " " << axisName(r.axis) << " " << r.offset.x << " " << r.offset.y << " " << r.width << " " << r.opacity
-            << " " << r.visible << "\n";
+            << " " << r.visible << " " << r.ownViewOnly << "\n";
     // Folders by their place in the file (1 up; 0 the top), as ids change on loading.
     std::map<uint32_t, size_t> folderAt;
     for (size_t i = 0; i < scene.folders.size(); ++i) folderAt[scene.folders[i].id] = i + 1;
@@ -339,6 +339,7 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
             r.path = readQuoted(l);
             std::string axis;
             l >> axis >> r.offset.x >> r.offset.y >> r.width >> r.opacity >> r.visible;
+            if (!(l >> r.ownViewOnly)) r.ownViewOnly = false; // (not in files from before 0.8)
             r.axis = axis == "front" ? Axis::Front : axis == "top" ? Axis::Top : Axis::Side;
             s.references.push_back(r);
         } else if (word == "look") {

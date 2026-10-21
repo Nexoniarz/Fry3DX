@@ -112,6 +112,7 @@ struct Reference {
     float width = 1.0f;         // metres across
     float opacity = 0.6f;
     bool visible = true;
+    bool ownViewOnly = false; // (shown only looking straight at it: a front drawing not in the way from the side)
 };
 
 // The Render tab's light and look.

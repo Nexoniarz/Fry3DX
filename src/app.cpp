@@ -5648,7 +5648,7 @@ private:
         }
         // Reference pictures: flat, see-through, a little behind the plane through the middle.
         for (const Reference& ref : scene_.references) {
-            if (!ref.visible) continue;
+            if (!ref.visible || (ref.ownViewOnly && !lookingAt(ref.axis))) continue;
             const Picture& pic = picture(ref);
             if (!pic.ok) continue;
             const auto c = referenceCorners(ref, pic.aspect);
@@ -7310,6 +7310,8 @@ private:
             undoable([&] { return ImGui::DragFloat("Width (m)", &ref->width, 0.005f, -100.0f, 100.0f, "%.3f"); });
             ImGui::TextDisabled("A minus width flips it.");
             undoable([&] { return ImGui::SliderFloat("See-through", &ref->opacity, 0.05f, 1.0f); });
+            if (ImGui::Checkbox("Only in its own view", &ref->ownViewOnly)) dirty_ = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shown only looking straight at it (front, side or top): out of the way in the 3D view and the others");
             if (ImGui::Button("Remove picture", ImVec2(w, 0))) deleteSelected();
             ImGui::End();
             return;
@@ -8250,6 +8252,14 @@ private:
         }
     }
 
+    // Looking straight at a reference picture's plane (the front picture from the front or the back...).
+    bool lookingAt(Axis a) const {
+        switch (a) {
+        case Axis::Front: return view_ == View::Front || view_ == View::Back;
+        case Axis::Top: return view_ == View::Top || view_ == View::Bottom;
+        default: return view_ == View::Left || view_ == View::Right;
+        }
+    }
     std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }
     void resetLayout() {
         layoutAgain_ = true, layoutDone_ = false;
