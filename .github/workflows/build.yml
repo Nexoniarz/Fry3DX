@@ -32,6 +32,11 @@ jobs:
         run: |
           cmake --preset portable -DGLSLC=$ANDROID_NDK_HOME/shader-tools/linux-x86_64/glslc
           cmake --build build/portable
+      - name: Test
+        # The modelling core, the scripts, and the fuzz test (random shapes, edits, broken files).
+        run: |
+          cmake --build build/portable --target check
+          build/portable/bin/fuzz_test 2000
       - name: Package
         run: APPIMAGETOOL=$PWD/appimagetool python3 tools/package.py linux appimage
       - uses: actions/upload-artifact@v4

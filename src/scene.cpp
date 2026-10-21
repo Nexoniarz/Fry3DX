@@ -423,6 +423,18 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
             p = std::find_if(s.folders.begin(), s.folders.end(), [&](const Folder& g) { return g.id == p; })->parent;
         }
     for (Object& o : s.objects) o.folder = idAt(o.folder);
+    // A number that isn't one (a file damaged, or edited by hand: "1e999", "nan"): nothing there.
+    auto finite = [](glm::vec3& v, glm::vec3 instead) {
+        if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) v = instead;
+    };
+    for (Object& o : s.objects) {
+        for (glm::vec3& v : o.mesh.verts) finite(v, glm::vec3(0.0f));
+        finite(o.position, glm::vec3(0.0f)), finite(o.scale, glm::vec3(1.0f));
+        if (!std::isfinite(o.rotation.w) || !std::isfinite(o.rotation.x) || !std::isfinite(o.rotation.y) || !std::isfinite(o.rotation.z) || glm::length(o.rotation) < 1e-6f)
+            o.rotation = glm::quat(1, 0, 0, 0);
+        else
+            o.rotation = glm::normalize(o.rotation);
+    }
     for (Object& o : s.objects) o.cuts = o.cuts >= 1 && o.cuts <= s.objects.size() && &s.objects[o.cuts - 1] != &o ? s.objects[o.cuts - 1].id : 0u;
     return s;
 }

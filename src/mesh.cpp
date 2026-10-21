@@ -289,13 +289,14 @@ std::vector<int> extrudeFaces(Mesh& m, const std::set<int>& faces, float distanc
         }
     }
     // One flat piece moves as one, along its normal; a bent one, each point along its own.
-    region = glm::length(region) > 1e-12f ? glm::normalize(region) : glm::vec3(0, 0, 1);
+    // (faces facing opposite ways, a plane's two sides: theirs cancel out; the first one's way)
+    region = glm::length(region) > 1e-12f ? glm::normalize(region) : faces.empty() ? glm::vec3(0, 0, 1) : faceNormal(m, *faces.begin());
     bool flat = true;
     for (int f : faces) flat &= glm::dot(faceNormal(m, f), region) > 0.99f;
     std::map<int, int> moved;
     std::vector<int> made;
     for (auto& [v, n] : along) {
-        const glm::vec3 dir = flat ? region : glm::normalize(n);
+        const glm::vec3 dir = flat || glm::length(n) < 1e-9f ? region : glm::normalize(n);
         moved[v] = int(m.verts.size());
         made.push_back(moved[v]);
         m.verts.push_back(m.verts[size_t(v)] + dir * distance);

@@ -343,11 +343,18 @@ std::optional<Mesh> combineManifold(const Mesh& a, const Mesh& b, Combine op) {
         manifold::MeshGL g;
         g.numProp = 3;
         g.vertProperties.reserve(m.verts.size() * 3);
-        for (const glm::vec3& v : m.verts) g.vertProperties.insert(g.vertProperties.end(), {v.x, v.y, v.z});
+        for (const glm::vec3& v : m.verts) {
+            if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) return std::nullopt; // (it can't take those)
+            g.vertProperties.insert(g.vertProperties.end(), {v.x, v.y, v.z});
+        }
         for (size_t f = 0; f < m.faces.size(); ++f) {
-            if (m.faces[f].size() < 3) return std::nullopt; // (a line: not a solid)
+            const auto& fv = m.faces[f];
+            if (fv.size() < 3) return std::nullopt; // (a line: not a solid)
+            for (size_t i = 0; i < fv.size(); ++i) // (a point twice round a face, or one that isn't there: it can't take that either)
+                if (fv[i] < 0 || size_t(fv[i]) >= m.verts.size() || std::find(fv.begin() + long(i) + 1, fv.end(), fv[i]) != fv.end()) return std::nullopt;
             for (const auto& t : triangulate(m, int(f)))
-                g.triVerts.insert(g.triVerts.end(), {uint32_t(t[0]), uint32_t(t[1]), uint32_t(t[2])}), g.faceID.push_back(firstFace + uint32_t(f));
+                if (t[0] == t[1] || t[1] == t[2] || t[0] == t[2]) return std::nullopt;
+                else g.triVerts.insert(g.triVerts.end(), {uint32_t(t[0]), uint32_t(t[1]), uint32_t(t[2])}), g.faceID.push_back(firstFace + uint32_t(f));
         }
         if (g.triVerts.empty()) return std::nullopt;
         g.runOriginalID = {manifold::Manifold::ReserveIDs(1)}; // (so it keeps the faces given, not its own numbering)

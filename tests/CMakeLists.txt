@@ -6,3 +6,7 @@ add_executable(script_test script_test.cpp)
 target_link_libraries(script_test PRIVATE fry_script)
 target_compile_definitions(script_test PRIVATE FRY_SCRIPTS_DIR="${PROJECT_SOURCE_DIR}/content/Fry3DX/scripts" FRY_PLUGINS_DIR="${PROJECT_SOURCE_DIR}/content/Fry3DX/plugins")
 add_test(NAME script_test COMMAND script_test)
+# Random shapes, edits and broken files thrown at the core: nothing may crash (the same each run).
+add_executable(fuzz_test fuzz_test.cpp)
+target_link_libraries(fuzz_test PRIVATE fry_core)
+add_test(NAME fuzz_test COMMAND fuzz_test)
