@@ -194,11 +194,35 @@ auto App::updateCamera(ImGuiIO& io) -> void {
         findSoft();
         message_ = std::format("Soft selection reaches {:.3f} m (wheel)", softReach_), messageAt_ = now();
     } else if (inView && io.MouseWheel != 0) {
-        // Towards what's under the mouse: the target slides that way a little.
+        // Towards what's under the mouse: an object, else the ground, else the plane the target's
+        // on. The whole camera closes in on that point (it stays under the mouse), so far from
+        // everything you still get somewhere instead of creeping at a spot in the air.
         const float k = std::pow(0.85f, io.MouseWheel);
         const Ray ray = mouseRay(io.MousePos);
-        if (auto p = hitPlane(ray, target_, -viewDir())) target_ += (*p - target_) * (1.0f - k);
-        dist_ = std::clamp(dist_ * k, 0.01f, 5000.0f);
+        std::optional<glm::vec3> at;
+        if (const Hit h = pickObject(ray); h.object) at = ray.origin + ray.dir * h.t;
+        else if (auto g = hitPlane(ray, glm::vec3(0.0f), glm::vec3(0, 0, 1)); g && glm::distance(*g, eye_) < dist_ * 40.0f) at = g;
+        if (!at && k < 1.0f) target_ += ray.dir * dist_ * (1.0f - k); // (nothing there: the sky; on that way)
+        else {
+            if (!at) at = hitPlane(ray, target_, -viewDir());
+            const float to = std::clamp(dist_ * k, 0.01f, 5000.0f);
+            if (at) target_ = *at + (target_ - *at) * (to / dist_);
+            dist_ = to;
+        }
+    }
+    // Arrow keys: forward, back and sideways along the ground (in a flat view: the way they
+    // point on the screen), Page Up / Down: up and down; Shift: faster. As fast as the view is big.
+    if (!io.WantTextInput && !search_.open && !ImGui::IsAnyItemActive() && !io.KeyCtrl && !io.KeyAlt) {
+        const float x = float(ImGui::IsKeyDown(ImGuiKey_RightArrow)) - float(ImGui::IsKeyDown(ImGuiKey_LeftArrow));
+        const float y = float(ImGui::IsKeyDown(ImGuiKey_UpArrow)) - float(ImGui::IsKeyDown(ImGuiKey_DownArrow));
+        const float z = float(ImGui::IsKeyDown(ImGuiKey_PageUp)) - float(ImGui::IsKeyDown(ImGuiKey_PageDown));
+        if (x != 0 || y != 0 || z != 0) {
+            const glm::vec3 f = viewDir(), right = glm::normalize(glm::cross(f, std::abs(f.z) > 0.99f ? glm::vec3(std::cos(glm::radians(yaw_)), std::sin(glm::radians(yaw_)), 0) : glm::vec3(0, 0, 1)));
+            const glm::vec3 ahead = view_ == View::Perspective ? glm::normalize(glm::cross(glm::vec3(0, 0, 1), right)) : glm::cross(right, f);
+            const float dt = std::min(io.DeltaTime, 0.1f), speed = dist_ * (io.KeyShift ? 2.5f : 0.8f) * dt;
+            target_ += (right * x + ahead * y + (view_ == View::Perspective ? glm::vec3(0, 0, z) : glm::vec3(0.0f))) * speed;
+            if (view_ != View::Perspective && z != 0) dist_ = std::clamp(dist_ * std::pow(io.KeyShift ? 0.1f : 0.4f, z * dt), 0.01f, 5000.0f); // (flat: closer or further)
+        }
     }
     settleView();
 }

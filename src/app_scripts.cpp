@@ -446,7 +446,8 @@ auto App::helpWindow() -> void {
     rows("Finding things", {{"F3 or Ctrl+Space", "Search for any command by name and run it"}, {"Space (held)", "The tools round the mouse: point at one, let go"},
                             {"Shift+Space (held)", "The views round the mouse"}});
     myKeysTable();
-    rows("Looking around", {{"Right drag", "Orbit round what you look at"}, {"Middle drag / Shift+Right drag", "Pan"}, {"Wheel", "Zoom (towards the mouse)"},
+    rows("Looking around", {{"Right drag", "Orbit round what you look at"}, {"Middle drag / Shift+Right drag", "Pan"}, {"Wheel", "Zoom (towards what's under the mouse)"},
+                            {"Arrow keys", "Move round (Page Up / Down: up and down; Shift: faster)"},
                             {"Orbit / Pan / Zoom buttons", "Drag them (touchpads)"}, {"F", "Frame the selection"}, {"Home", "Frame everything"},
                             {"Numpad 1 / 3 / 7", "Front / side / top (Shift: the opposite)"}, {"Numpad 5", "Flat view / 3D"},
                             {"Z / Shift+Z", "Solid or Rendered / Wireframe"}, {"Alt+Z", "X-ray: see and pick through"}});

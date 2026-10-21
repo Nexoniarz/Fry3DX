@@ -1463,6 +1463,7 @@ private:
         int left = 0;
         std::vector<double> ms;
     } bench_;
+    std::vector<std::pair<ImGuiKey, int>> holding_; // (fry_hold: keys held down for that many more frames)
     void benchStep();
     void benchEnd(std::chrono::steady_clock::time_point began);
 

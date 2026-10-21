@@ -4,3 +4,7 @@ build/
 __pycache__/
 *.fry~
 dist/
+
+# crash dumps and stray test programs
+core.[0-9]*
+a.out

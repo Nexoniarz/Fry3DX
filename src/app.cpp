@@ -262,6 +262,21 @@ auto App::init() -> void {
         if (a.size() < 3) return self->say("fry_bench orbit|smooth|angle|round frames");
         self->bench_ = {a[1], std::max(1, std::stoi(a[2])), {}};
     }, "Fry3DX: fry_bench orbit|smooth|angle|round frames: time that many frames while the camera turns or the picked object's setting is dragged");
+    static keel::Cmd hold("fry_hold", [](const keel::Args& a) { // a key held down for some frames, as if pressed (for trying keys out)
+        if (a.size() < 3) return self->say("fry_hold key frames (UpArrow, PageUp, LeftShift...)");
+        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
+            if (a[1] == ImGui::GetKeyName(ImGuiKey(k))) {
+                ImGui::GetIO().AddKeyEvent(ImGuiKey(k), true);
+                return self->holding_.push_back({ImGuiKey(k), std::stoi(a[2])});
+            }
+        self->say("fry_hold: no key called " + a[1]);
+    }, "Fry3DX: fry_hold key frames: hold a key down (UpArrow, PageUp...)");
+    static keel::Cmd wheel("fry_wheel", [](const keel::Args& a) { // the wheel turned at x y (0..1 of the view)
+        if (a.size() < 4) return;
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(self->viewMin_.x + (self->viewMax_.x - self->viewMin_.x) * std::stof(a[1]), self->viewMin_.y + (self->viewMax_.y - self->viewMin_.y) * std::stof(a[2]));
+        io.AddMouseWheelEvent(0, std::stof(a[3]));
+    }, "Fry3DX: fry_wheel x y notches: the mouse wheel at that point of the view");
     static keel::Cmd capture("fry_capture", [](const keel::Args& a) { if (a.size() > 1) self->savePicture(a[1]); }, "Fry3DX: save a picture of the view");
     static keel::Cmd layout("fry_layout", [](const keel::Args& a) {
         Object* o = self->find(self->active_);
@@ -460,6 +475,9 @@ auto App::onEscape() -> void {
 
 // (fry_bench) Each frame: the change being timed.
 auto App::benchStep() -> void {
+    for (auto& [k, left] : holding_)
+        if (--left <= 0) ImGui::GetIO().AddKeyEvent(k, false);
+    std::erase_if(holding_, [](const auto& h) { return h.second <= 0; });
     if (bench_.left <= 0) return;
     const int i = int(bench_.ms.size());
     Object* o = find(active_);
