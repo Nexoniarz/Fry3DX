@@ -56,7 +56,8 @@ void main() {
         vec3 v = viewPos(q) - p;
         float vv = dot(v, v);
         float falloff = max(0.0, 1.0 - vv / (pc.radius * pc.radius));
-        occlusion += max(0.0, dot(v, n) - 0.01 * p.z) / (vv + 1.0) * falloff;
+        // (+ a little against dividing by nothing: its share of the reach, so any scale looks the same)
+        occlusion += max(0.0, dot(v, n) - 0.01 * p.z) / (vv + pc.radius * pc.radius * 0.0017) * falloff;
     }
     float ao = max(0.0, 1.0 - 2.0 * occlusion / float(kSamples) * pc.radius * 0.6);
     o_ao = vec4(mix(1.0, ao * ao, pc.strength));

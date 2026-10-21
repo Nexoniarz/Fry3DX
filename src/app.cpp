@@ -21,6 +21,7 @@ keel::Cvar fry_touch("fry_touch", "0", keel::CVAR_ARCHIVE, "Fry3DX: the phone la
 #endif
 keel::Cvar fry_uiscale("fry_uiscale", "0", 0, "Fry3DX: draw the UI this many times bigger (0: by the screen)");
 keel::Cvar fry_uisize("fry_uisize", "1", keel::CVAR_ARCHIVE, "Fry3DX: the phone layout's size, times");
+keel::Cvar fry_movespeed("fry_movespeed", "1", keel::CVAR_ARCHIVE, "Fry3DX: how fast the camera moves (keys, wheel, pan): Shift + wheel changes it");
 keel::Cvar fry_theme("fry_theme", "0", keel::CVAR_ARCHIVE, "Fry3DX: how it looks: 0 like the desktop, 1 dark, 2 light");
 keel::Cvar fry_pluginsoff("fry_pluginsoff", "", keel::CVAR_ARCHIVE, "Fry3DX: plug-ins turned off (their file names, with | between)");
 keel::Cvar fry_autosave("fry_autosave", "2", keel::CVAR_ARCHIVE, "Fry3DX: autosave every this many minutes while there are changes (0: off)");
@@ -54,7 +55,8 @@ auto App::init() -> void {
     static keel::Cmd orbit("fry_orbit", [](const keel::Args& a) {
         if (a.size() > 2) self->view_ = View::Perspective, self->fov_ = 50, self->yaw_ = std::stof(a[1]), self->pitch_ = std::stof(a[2]);
         if (a.size() > 3) self->dist_ = std::stof(a[3]);
-    }, "Fry3DX: fry_orbit yaw pitch [distance]");
+        if (a.size() > 6) self->target_ = {std::stof(a[4]), std::stof(a[5]), std::stof(a[6])};
+    }, "Fry3DX: fry_orbit yaw pitch [distance [target x y z]]");
     // A sculpt stroke across the view (0..1 of it), for pictures of it: brush 1-6, then from and to.
     static keel::Cmd sculptStroke("fry_sculpt", [](const keel::Args& a) {
         if (!self->viewReady()) return self->say("fry_sculpt: the view isn't up yet (+wait 1 first)");
@@ -264,6 +266,16 @@ auto App::init() -> void {
     }, "Fry3DX: fry_bench orbit|smooth|angle|round frames: time that many frames while the camera turns or the picked object's setting is dragged");
     static keel::Cmd hold("fry_hold", [](const keel::Args& a) { // a key held down for some frames, as if pressed (for trying keys out)
         if (a.size() < 3) return self->say("fry_hold key frames (UpArrow, PageUp, LeftShift...)");
+        if (a[1] == "MouseRight") { // (pressed now, let go after that many frames)
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            return self->holding_.push_back({ImGuiKey_MouseRight, std::stoi(a[2])});
+        }
+        if (a[1] == "Escape") { // (the engine takes this one from the window's own events, before the panels)
+            SDL_Event e{};
+            e.type = SDL_EVENT_KEY_DOWN, e.key.scancode = SDL_SCANCODE_ESCAPE, e.key.key = SDLK_ESCAPE, e.key.down = true;
+            SDL_PushEvent(&e);
+            return;
+        }
         for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
             if (a[1] == ImGui::GetKeyName(ImGuiKey(k))) {
                 ImGui::GetIO().AddKeyEvent(ImGuiKey(k), true);
@@ -271,6 +283,10 @@ auto App::init() -> void {
             }
         self->say("fry_hold: no key called " + a[1]);
     }, "Fry3DX: fry_hold key frames: hold a key down (UpArrow, PageUp...)");
+    static keel::Cmd mouse("fry_mouse", [](const keel::Args& a) { // the mouse to x y (0..1 of the view)
+        if (a.size() < 3) return;
+        ImGui::GetIO().AddMousePosEvent(self->viewMin_.x + (self->viewMax_.x - self->viewMin_.x) * std::stof(a[1]), self->viewMin_.y + (self->viewMax_.y - self->viewMin_.y) * std::stof(a[2]));
+    }, "Fry3DX: fry_mouse x y: the mouse to that point of the view");
     static keel::Cmd wheel("fry_wheel", [](const keel::Args& a) { // the wheel turned at x y (0..1 of the view)
         if (a.size() < 4) return;
         ImGuiIO& io = ImGui::GetIO();
@@ -459,7 +475,10 @@ auto App::allowQuit() -> bool {
 }
 
 auto App::onEscape() -> void {
-    if (askSave_) askSave_ = 0;
+    // (the engine takes Escape before the panels see it: whatever's open on top goes first)
+    if (search_.open) search_.open = false;
+    else if (pie_) pie_ = 0;
+    else if (askSave_) askSave_ = 0;
     else if (showRecover_) showRecover_ = false;
     else if (editLayer()) cancelFloating();
     else if (!knifePts_.empty()) knifePts_.clear();
@@ -476,7 +495,7 @@ auto App::onEscape() -> void {
 // (fry_bench) Each frame: the change being timed.
 auto App::benchStep() -> void {
     for (auto& [k, left] : holding_)
-        if (--left <= 0) ImGui::GetIO().AddKeyEvent(k, false);
+        if (--left <= 0) k == ImGuiKey_MouseRight ? ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false) : ImGui::GetIO().AddKeyEvent(k, false);
     std::erase_if(holding_, [](const auto& h) { return h.second <= 0; });
     if (bench_.left <= 0) return;
     const int i = int(bench_.ms.size());
@@ -1628,7 +1647,7 @@ auto App::setTab(Tab t) -> void {
 // ───────────────────────────── keys ─────────────────────────────
 
 auto App::shortcuts(ImGuiIO& io) -> void {
-    if (io.WantTextInput || slide_.active || drag_.active) return; // (a slide, a drag: their own keys)
+    if (io.WantTextInput || slide_.active || drag_.active || looking_) return; // (a slide, a drag: their own keys; turning the camera: WASD, Q and E move it)
     if (tool_ == Tool::Draw && !drawPts_.empty() && sketchKeys(io)) return;
     const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
     auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };

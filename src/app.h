@@ -275,6 +275,7 @@ extern keel::Cvar fry_touch;
 extern keel::Cvar fry_uiscale;
 extern keel::Cvar fry_uisize;
 extern keel::Cvar fry_theme;
+extern keel::Cvar fry_movespeed;
 extern keel::Cvar fry_pluginsoff;
 extern keel::Cvar fry_autosave;
 
@@ -356,7 +357,8 @@ private:
     ImVec2 viewMin_{0, 0}, viewMax_{1, 1};
     glm::mat4 vp_{1.0f};
     glm::vec3 eye_{0.0f};
-    bool orbiting_ = false, panning_ = false;
+    bool orbiting_ = false, panning_ = false, looking_ = false; // (looking: right drag turns the camera where it stands)
+    float nearest_ = 1.0f; // (how far the nearest thing is from the eye, m: worked out with the view)
     bool xray_ = false, showGrid_ = true, renderGrid_ = false;
     std::string appliedLook_;
     keel::ModelId ground_{};
@@ -1464,6 +1466,11 @@ private:
         std::vector<double> ms;
     } bench_;
     std::vector<std::pair<ImGuiKey, int>> holding_; // (fry_hold: keys held down for that many more frames)
+    float aoReach() const;
+    void lookBy(ImVec2 d);
+    void refocus();
+    float nearestThing();
+    float viewScale() const { return std::max(std::min(dist_, nearest_), 0.001f); } // (how big the view is where it matters: what's ahead, or nearer)
     void benchStep();
     void benchEnd(std::chrono::steady_clock::time_point began);
 

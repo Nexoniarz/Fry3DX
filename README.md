@@ -102,8 +102,10 @@ Five tabs along the top: **Model**, **Paint**, **Layout**, **Render**, **Print**
 - **Layout tab**: move, turn and size the flat frames of the surface yourself; the paint follows.
 
 **Seeing it**
-- **Getting round**: right drag orbits, middle drag pans, the wheel goes towards what's under the
-  mouse; the **arrow keys** move you along the ground (Page Up / Down: up and down, Shift: faster).
+- **Getting round**, as in games, Unreal or Unity: right drag turns the camera where it stands,
+  and while it's held W A S D move where you look (Q / E: down, up). The **arrow keys** move any
+  time (Page Up / Down: down and up), the **wheel** goes forward and back, **Shift + wheel** sets
+  how fast it all goes. Alt + right drag orbits round what's picked; middle drag pans.
 - **Solid** view for modelling, **Rendered** with a real sky, sun and soft shadows (Z). Wireframe
   (Shift+Z), X-ray (Alt+Z). The Render tab: the sun, sky, ground, brightness, shadows, glow;
   F12 saves a picture of just the view.

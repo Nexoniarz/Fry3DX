@@ -1985,19 +1985,19 @@ auto App::statusBar() -> void {
     else if (tab_ == Tab::Layout) {
         for (const LayToolInfo& t : kLayTools)
             if (t.tool == layTool_)
-                ImGui::TextDisabled("%s:  %s   ·   Tab: frames or corners   Right drag: orbit (pan in the Picture panel)   F1: all keys", t.name, t.hint);
+                ImGui::TextDisabled("%s:  %s   ·   Tab: frames or corners   Right drag: look (pan in the Picture panel)   F1: all keys", t.name, t.hint);
     } else if ((tab_ == Tab::Print && printTool_ != PrintTool::None) || printTool_ == PrintTool::Measure) {
         ImGui::TextDisabled(printTool_ == PrintTool::Measure ? "Measure:  click two points on the model (corners catch the mouse); a third click starts again   ·   M (Print) or Esc: done"
                                                              : "Lay flat:  click the face it should stand on: it turns so that face is down, on the bed   ·   L: done");
     } else if (tab_ == Tab::Paint && sculpting_) {
         for (const SculptToolInfo& t : kSculptTools)
-            if (t.brush == sculptBrush_) ImGui::TextDisabled("%s:  %s   ·   Shift: smooth   X: both sides   Tab: colour   Right drag: orbit   F1: all keys", t.name, t.hint);
+            if (t.brush == sculptBrush_) ImGui::TextDisabled("%s:  %s   ·   Shift: smooth   X: both sides   Tab: colour   Right drag: look   F1: all keys", t.name, t.hint);
     } else if (tab_ == Tab::Paint) {
         for (const PaintToolInfo& t : kPaintTools)
-            if (t.tool == paintTool_) ImGui::TextDisabled("%s:  %s   ·   Right drag: orbit   Wheel: zoom (in the Picture panel too)   F1: all keys", t.name, t.hint);
+            if (t.tool == paintTool_) ImGui::TextDisabled("%s:  %s   ·   Right drag: look   Wheel: forward / back (zoom in the Picture panel)   F1: all keys", t.name, t.hint);
     } else
         for (const ToolInfo& t : kTools)
-            if (t.tool == tool_) ImGui::TextDisabled("%s:  %s   ·   Right drag: orbit   Middle drag: pan   Wheel: zoom   F1: all keys", t.name, t.hint);
+            if (t.tool == tool_) ImGui::TextDisabled("%s:  %s   ·   Right drag + WASD: look and move   Alt+right: orbit   Wheel: forward / back   F1: all keys", t.name, t.hint);
     ImGui::End();
 }
 

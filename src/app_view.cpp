@@ -171,57 +171,119 @@ auto App::orbitBy(ImVec2 d) -> void {
     pitch_ = std::clamp(pitch_ + d.y * 0.3f, -89.9f, 89.9f);
 }
 
+// Turning the camera where it stands (right drag): what it looks at moves, the eye doesn't.
+auto App::lookBy(ImVec2 d) -> void {
+    if (std::abs(d.x) + std::abs(d.y) > 0.5f) leaveFlatView();
+    const glm::vec3 eye = target_ - viewDir() * dist_;
+    yaw_ -= d.x * 0.2f;
+    pitch_ = std::clamp(pitch_ + d.y * 0.2f, -89.9f, 89.9f);
+    target_ = eye + viewDir() * dist_;
+}
+
+// What the camera looks at now: the object or the ground straight ahead (not further than the
+// scene reaches). The point it turns round, how fast it moves and how near it draws follow it.
+auto App::refocus() -> void {
+    const glm::vec3 f = viewDir(), eye = target_ - f * dist_;
+    const Ray ray{eye, f};
+    float t = -1.0f;
+    if (const Hit h = pickObject(ray); h.object) t = h.t;
+    else if (auto g = hitPlane(ray, glm::vec3(0.0f), glm::vec3(0, 0, 1))) t = std::min(glm::distance(eye, *g), std::max(glm::length(eye) * 2.0f, 50.0f));
+    if (t > 0.0f) dist_ = std::clamp(t, 0.01f, 5000.0f), target_ = eye + f * dist_;
+}
+
+// How far the nearest thing (an object, the ground) is from the eye: the near plane and the
+// shade in corners go by it, so looking past something close doesn't break them.
+auto App::nearestThing() -> float {
+    float best = std::abs(eye_.z); // (the ground)
+    for (const Object& o : scene_.objects) {
+        if (!o.visible) continue;
+        auto& [version, radius] = radii_[o.id];
+        if (version != shapeKey(o) || !version) {
+            version = shapeKey(o), radius = 0;
+            for (const glm::vec3& v : o.mesh.verts) radius = std::max(radius, glm::length(v));
+        }
+        best = std::min(best, std::max(glm::distance(eye_, o.position) - radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}), 0.0f));
+    }
+    return std::max(best, 0.001f);
+}
+
 auto App::panBy(ImVec2 d) -> void {
     const glm::vec3 f = viewDir(), right = glm::normalize(glm::cross(f, std::abs(f.z) > 0.99f ? glm::vec3(std::cos(glm::radians(yaw_)), std::sin(glm::radians(yaw_)), 0) : glm::vec3(0, 0, 1)));
     const glm::vec3 up = glm::cross(right, f);
     const float perPixel = viewHeight() / std::max(ImGui::GetIO().DisplaySize.y, 1.0f);
-    target_ += (-right * d.x + up * d.y) * perPixel;
+    target_ += (-right * d.x + up * d.y) * perPixel * fry_movespeed.f();
 }
 
 auto App::updateCamera(ImGuiIO& io) -> void {
     const bool inView = mouseInView(io);
     // Orbit: right drag. Pan: middle drag (or Shift + right). Zoom: the wheel.
     const bool rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right), midDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-    if (inView && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) orbiting_ = !io.KeyShift;
-    if (inView && (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) || (io.KeyShift && ImGui::IsMouseClicked(ImGuiMouseButton_Right)))) panning_ = true, orbiting_ = false;
-    if (!rightDown) orbiting_ = false;
+    // Right drag turns the camera where it stands (as in games, Unreal, Unity); Alt + right drag
+    // turns it round what's picked (or what it looks at). A finger on a phone: round, still.
+    if (inView && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !io.KeyShift) {
+        if (io.KeyAlt || touch()) {
+            orbiting_ = true;
+            if (!selected_.empty() && !touch()) { // (round the middle of what's picked)
+                glm::vec3 lo(1e30f), hi(-1e30f);
+                for (const Object& o : scene_.objects)
+                    if (selected_.count(o.id)) lo = glm::min(lo, o.position), hi = glm::max(hi, o.position);
+                const glm::vec3 eye = target_ - viewDir() * dist_, pivot = (lo + hi) * 0.5f;
+                if (glm::distance(eye, pivot) > 1e-4f) {
+                    const glm::vec3 f = glm::normalize(pivot - eye);
+                    yaw_ = glm::degrees(std::atan2(f.y, f.x)), pitch_ = glm::degrees(std::asin(std::clamp(-f.z, -1.0f, 1.0f)));
+                    target_ = pivot, dist_ = glm::distance(eye, pivot);
+                }
+            }
+        } else looking_ = true;
+    }
+    if (inView && (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) || (io.KeyShift && ImGui::IsMouseClicked(ImGuiMouseButton_Right)))) panning_ = true, orbiting_ = looking_ = false;
+    if (!rightDown) {
+        if (looking_) refocus();
+        orbiting_ = looking_ = false;
+    }
     if (!midDown && !rightDown) panning_ = false;
     const ImVec2 d = io.MouseDelta;
     if (orbiting_ && (d.x != 0 || d.y != 0)) orbitBy(d);
+    if (looking_ && (d.x != 0 || d.y != 0)) lookBy(d);
     if (panning_ && (d.x != 0 || d.y != 0)) panBy(d);
     if (inView && io.MouseWheel != 0 && drag_.active && softSel_ && mode_ == Mode::Edit) { // the soft selection's reach, not zoom
         softReach_ = std::clamp(softReach_ * std::pow(1.15f, io.MouseWheel), 0.001f, 1000.0f);
         findSoft();
         message_ = std::format("Soft selection reaches {:.3f} m (wheel)", softReach_), messageAt_ = now();
+    } else if (inView && io.MouseWheel != 0 && io.KeyShift) { // Shift + wheel: how fast every way of moving goes
+        const float speed = std::clamp(fry_movespeed.f() * std::pow(1.25f, io.MouseWheel), 0.05f, 20.0f);
+        keel::execute(std::format("fry_movespeed {:.3g}", speed));
+        message_ = std::format("Moving speed: x{:.2g} (Shift + wheel)", speed), messageAt_ = now();
     } else if (inView && io.MouseWheel != 0) {
-        // Towards what's under the mouse: an object, else the ground, else the plane the target's
-        // on. The whole camera closes in on that point (it stays under the mouse), so far from
-        // everything you still get somewhere instead of creeping at a spot in the air.
-        const float k = std::pow(0.85f, io.MouseWheel);
-        const Ray ray = mouseRay(io.MousePos);
-        std::optional<glm::vec3> at;
-        if (const Hit h = pickObject(ray); h.object) at = ray.origin + ray.dir * h.t;
-        else if (auto g = hitPlane(ray, glm::vec3(0.0f), glm::vec3(0, 0, 1)); g && glm::distance(*g, eye_) < dist_ * 40.0f) at = g;
-        if (!at && k < 1.0f) target_ += ray.dir * dist_ * (1.0f - k); // (nothing there: the sky; on that way)
+        // The wheel moves the camera straight forward or back (where it looks), a fifth of the
+        // way to what's ahead each notch, but never less than a little of the scene's size: so it
+        // doesn't creep to a stop in front of a surface (it goes through). In a flat view: closer.
+        if (view_ != View::Perspective) dist_ = std::clamp(dist_ * std::pow(0.85f, io.MouseWheel), 0.01f, 5000.0f);
         else {
-            if (!at) at = hitPlane(ray, target_, -viewDir());
-            const float to = std::clamp(dist_ * k, 0.01f, 5000.0f);
-            if (at) target_ = *at + (target_ - *at) * (to / dist_);
-            dist_ = to;
+            float size = 0.0f; // (the biggest object's size: the least step is a little of it)
+            for (const Object& o : scene_.objects)
+                if (auto r = radii_.find(o.id); r != radii_.end()) size = std::max(size, r->second.second * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
+            const float step = std::clamp(std::max(dist_ * 0.2f, size * 0.05f), 0.001f, 500.0f) * fry_movespeed.f();
+            target_ += viewDir() * step * io.MouseWheel;
+            refocus();
         }
     }
-    // Arrow keys: forward, back and sideways along the ground (in a flat view: the way they
-    // point on the screen), Page Up / Down: up and down; Shift: faster. As fast as the view is big.
+    // Moving: the arrow keys any time, and WASD (Q / E down and up) while the right button turns
+    // the camera; forward is where it looks (in a flat view: up the screen). Page Up / Down: up
+    // and down. Shift: faster. As fast as what's near is far.
     if (!io.WantTextInput && !search_.open && !ImGui::IsAnyItemActive() && !io.KeyCtrl && !io.KeyAlt) {
-        const float x = float(ImGui::IsKeyDown(ImGuiKey_RightArrow)) - float(ImGui::IsKeyDown(ImGuiKey_LeftArrow));
-        const float y = float(ImGui::IsKeyDown(ImGuiKey_UpArrow)) - float(ImGui::IsKeyDown(ImGuiKey_DownArrow));
-        const float z = float(ImGui::IsKeyDown(ImGuiKey_PageUp)) - float(ImGui::IsKeyDown(ImGuiKey_PageDown));
+        auto down = [](ImGuiKey k) { return float(ImGui::IsKeyDown(k)); };
+        const float wasd = looking_ ? 1.0f : 0.0f;
+        const float x = down(ImGuiKey_RightArrow) - down(ImGuiKey_LeftArrow) + wasd * (down(ImGuiKey_D) - down(ImGuiKey_A));
+        const float y = down(ImGuiKey_UpArrow) - down(ImGuiKey_DownArrow) + wasd * (down(ImGuiKey_W) - down(ImGuiKey_S));
+        const float z = down(ImGuiKey_PageUp) - down(ImGuiKey_PageDown) + wasd * (down(ImGuiKey_E) - down(ImGuiKey_Q));
         if (x != 0 || y != 0 || z != 0) {
             const glm::vec3 f = viewDir(), right = glm::normalize(glm::cross(f, std::abs(f.z) > 0.99f ? glm::vec3(std::cos(glm::radians(yaw_)), std::sin(glm::radians(yaw_)), 0) : glm::vec3(0, 0, 1)));
-            const glm::vec3 ahead = view_ == View::Perspective ? glm::normalize(glm::cross(glm::vec3(0, 0, 1), right)) : glm::cross(right, f);
-            const float dt = std::min(io.DeltaTime, 0.1f), speed = dist_ * (io.KeyShift ? 2.5f : 0.8f) * dt;
+            const glm::vec3 ahead = view_ == View::Perspective ? f : glm::cross(right, f);
+            const float dt = std::min(io.DeltaTime, 0.1f), speed = std::max(viewScale() * 1.5f, 0.3f) * fry_movespeed.f() * (io.KeyShift ? 3.0f : 1.0f) * dt;
             target_ += (right * x + ahead * y + (view_ == View::Perspective ? glm::vec3(0, 0, z) : glm::vec3(0.0f))) * speed;
             if (view_ != View::Perspective && z != 0) dist_ = std::clamp(dist_ * std::pow(io.KeyShift ? 0.1f : 0.4f, z * dt), 0.01f, 5000.0f); // (flat: closer or further)
+            if (view_ == View::Perspective && !looking_) refocus(); // (while turning: when the button's let go)
         }
     }
     settleView();
@@ -234,6 +296,7 @@ auto App::settleView() -> void {
     const float aspect = io.DisplaySize.x / std::max(io.DisplaySize.y, 1.0f);
     shift_ = glm::vec2((viewMin_.x + viewMax_.x) / std::max(io.DisplaySize.x, 1.0f) - 1.0f, (viewMin_.y + viewMax_.y) / std::max(io.DisplaySize.y, 1.0f) - 1.0f);
     eye_ = target_ - viewDir() * dist_;
+    nearest_ = nearestThing();
     nearFar_ = nearFar();
     vp_ = viewProjection(eye_, yaw_, pitch_, fov_, aspect, shift_, nearFar_);
 }
@@ -252,7 +315,7 @@ auto App::nearFar() -> glm::vec2 {
     }
     // (the near plane as far out as it can be: the depth's precision is spread between them, so
     // the nearer it is, the more surfaces far off flicker through each other)
-    const float nearM = std::clamp(dist_ * 0.005f, 1e-5f, 50.0f);
+    const float nearM = std::clamp(viewScale() * 0.005f, 1e-5f, 50.0f);
     const float farM = std::max({dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, 100.0f});
     return glm::vec2(nearM, farM) * kUnits;
 }
@@ -1137,11 +1200,17 @@ auto App::dragNow(const ImGuiIO& io) -> void {
 
 // Solid: a plain grey room and soft studio light, no shadows or effects — for seeing shapes.
 // Rendered: sky, sun, shadows and effects.
+// How far the shade in corners reaches (units): a share of how far away you look, so close up it
+// stays in the corners instead of smearing over everything in a pattern. (24 at the first view.)
+auto App::aoReach() const -> float {
+    return std::clamp(viewScale() * kUnits * 0.15f, 0.005f, 400.0f);
+}
+
 auto App::applyShading() -> void {
     const Look& k = scene_.look;
     const std::string want =
         shading() == Shading::Rendered
-            ? std::format("r_ssao {}; r_bloom {}; r_vignette {}; r_exposure {}; r_saturation {}; r_sharpen {}; r_shadowsoft {}; r_gi {}; r_fog 0; r_skycolor \"{} {} {}\"", k.ao,
+            ? std::format("r_ssao {}; r_ssao_radius {:.2g}; r_bloom {}; r_vignette {}; r_exposure {}; r_saturation {}; r_sharpen {}; r_shadowsoft {}; r_gi {}; r_fog 0; r_skycolor \"{} {} {}\"", k.ao, aoReach(),
                           k.bloom, k.vignette, k.exposure, k.saturation, k.sharpen, k.shadowSoft, kRayLight, k.background.r, k.background.g, k.background.b)
             : std::string("r_ssao 0; r_bloom 0; r_vignette 0; r_exposure 1; r_saturation 1; r_sharpen 0; r_gi 0; r_fog 0; r_skycolor \"0.2 0.2 0.215\"");
     if (want == appliedLook_) return;
@@ -1305,53 +1374,77 @@ auto App::draw3D(keel::Renderer& r) -> void {
         r.drawModel(id, toUnits, glm::vec4(1.0f, 1.0f, 1.0f, ref.opacity), nullptr, &flat, false);
     }
     // The grid on the work plane (the ground, or what a flat view looks at), and the axes.
+    // Four sets of lines, each ten times further apart than the one before, each drawn round
+    // where you look and fading out before its edge. A line's look goes only by how far apart
+    // it and its like are on the screen: too close together, it fades away; far apart, it's
+    // brighter and a little wider. So nothing jumps as the view moves or the steps change: new
+    // lines come in too close together to see and fade in. Each line is drawn by the widest set
+    // it belongs to (once), in pieces, each a pixel wide where it is.
     if (tab_ == Tab::Render ? renderGrid_ : showGrid_) {
         glm::vec3 p, n;
         workPlane(p, n);
         const glm::vec3 u = n.z > 0.5f ? glm::vec3(1, 0, 0) : n.x > 0.5f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
         const glm::vec3 v = glm::cross(n, u);
-        const float step = gridStep();
-        const int count = 20;
+        const float first = gridStep() * 0.1f;
+        const int count = 20, pieces = 12, levels = 4;
         const glm::vec3 centre = target_ - n * glm::dot(target_, n);
+        const float cu = glm::dot(centre, u), cv = glm::dot(centre, v);
         const float shade = rendered ? 0.0f : 1.0f; // (dark lines on the sunny ground, light ones in the grey room)
-        // Two rings: the fine lines round where you look, then lines ten times apart out to
-        // the horizon (they leave out the middle, so no line is drawn twice).
-        for (int level = 0; level < 2; ++level) {
-            const float s = step * (level ? 10.0f : 1.0f), inner = count * step; // (the fine ring's reach)
-            const float cu = snapTo(glm::dot(centre, u), step * 10), cv = snapTo(glm::dot(centre, v), step * 10);
-            const float fade = level ? 0.6f : 1.0f;
-            for (int i = -count; i <= count; ++i)
-                for (int dir = 0; dir < 2; ++dir) {
-                    const glm::vec3 along = dir ? u : v, across = dir ? v : u;
-                    const float at = (dir ? cv : cu) + float(i) * s, mid = dir ? cu : cv;
-                    const bool major = std::abs(snapTo(at, s * 10) - at) < s * 0.01f;
-                    const bool axis = std::abs(at) < s * 0.01f;
-                    glm::vec4 col = glm::vec4(glm::vec3(shade), (major ? (rendered ? 0.35f : 0.13f) : (rendered ? 0.16f : 0.06f)) * fade);
-                    if (axis) col = dir ? (n.x > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.9f, 0.25f, 0.25f, 0.9f))
-                                        : (n.z > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.25f, 0.45f, 0.95f, 0.9f));
-                    const float from = mid - count * s, to = mid + count * s;
-                    // (a far line through the fine ring, which has it already: only its two ends)
-                    const bool split = level == 1 && std::abs(at - (dir ? cv : cu)) <= inner * 1.0001f;
-                    const int pieces = level ? 24 : 8;
-                    for (int k = 0; k < pieces; ++k) {
-                        const float t0 = from + (to - from) * float(k) / float(pieces), t1 = from + (to - from) * float(k + 1) / float(pieces);
-                        if (split && t1 > mid - inner && t0 < mid + inner) continue;
-                        const glm::vec3 a = across * at + along * t0, b = across * at + along * t1, c = (a + b) * 0.5f;
-                        // Each piece about a pixel wide where it is, and fading as the lines get
-                        // too close together on the screen to tell apart (far off, or seen edge
-                        // on): no crawling, flickering band towards the horizon.
-                        const glm::vec3 sight = glm::normalize(c - eye_);
-                        const float px = pixelSize(c), seen = glm::length(across - sight * glm::dot(across, sight));
-                        const float apart = s * (major ? 10.0f : 1.0f) * seen / std::max(px, 1e-9f); // (pixels to the next line like it: a major line's are ten apart)
-                        glm::vec4 pc = col;
-                        pc.a *= axis ? std::max(glm::smoothstep(1.5f, 6.0f, apart), 0.35f) : glm::smoothstep(3.0f, 12.0f, apart);
-                        if (pc.a < 0.004f) continue;
-                        // (each end a hair towards the eye along its own line of sight: the same
-                        // place on the screen, but in front of the ground it lies on, so they don't fight)
-                        auto lift = [&](const glm::vec3& q) { return q + (eye_ - q) * 0.002f; };
-                        r.drawStreak(lift(a) * kUnits, lift(b) * kUnits, px * (major || axis ? 1.6f : 1.0f) * kUnits, pc, keel::kWhiteTexture);
-                    }
+        const float dim = rendered ? 0.14f : 0.05f, bright = rendered ? 0.4f : 0.16f;
+        auto lift = [&](const glm::vec3& q) { return q + (eye_ - q) * 0.002f; }; // (towards the eye along its line of sight: the same place on the screen, but in front of the ground)
+        // One line, at `at` across, from `from` to `to` along; s: how far apart it and its like
+        // are; ring: how far its set reaches from the middle (0: no end, the axes).
+        auto line = [&](int dir, float at, float from, float to, float s, float ring, glm::vec4 col, bool axis) {
+            const glm::vec3 along = dir ? u : v, across = dir ? v : u;
+            const float mid = dir ? cu : cv, side = std::abs(at - (dir ? cv : cu));
+            // (short pieces near the eye, longer further off: each one's width and fading is
+            // worked out at its middle, so it has to be about the same all along it)
+            const float near = std::clamp(glm::dot(eye_, along), from, to);
+            for (int k = 0; k < pieces * 2; ++k) {
+                const int sideOf = k < pieces ? -1 : 1, j = k % pieces;
+                const float len = sideOf < 0 ? near - from : to - near;
+                if (len <= 0.0f) continue;
+                const float f0 = float(j) / float(pieces), f1 = float(j + 1) / float(pieces);
+                const float t0 = near + float(sideOf) * len * f0 * f0 * f0, t1 = near + float(sideOf) * len * f1 * f1 * f1;
+                const glm::vec3 a = across * at + along * t0, b = across * at + along * t1, c = (a + b) * 0.5f;
+                // (pixels to the next line like it, across this one as it lies on the screen)
+                const glm::vec4 c0 = vp_ * glm::vec4(c, 1.0f), c1 = vp_ * glm::vec4(c + across * s, 1.0f), c2 = vp_ * glm::vec4(c + along * s, 1.0f);
+                if (c0.w <= 1e-6f || c1.w <= 1e-6f || c2.w <= 1e-6f) continue; // (behind the eye)
+                const glm::vec2 half = glm::vec2(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y) * 0.5f;
+                const glm::vec2 s0 = glm::vec2(c0) / c0.w * half, s1 = glm::vec2(c1) / c1.w * half, s2 = glm::vec2(c2) / c2.w * half;
+                const glm::vec2 way = s2 - s0;
+                const float wayLen = glm::length(way), d = s1.x - s0.x, e = s1.y - s0.y;
+                const float apart = wayLen > 1e-6f ? std::abs(d * way.y - e * way.x) / wayLen : glm::length(s1 - s0);
+                const float px = pixelSize(c);
+                float alpha = axis ? std::max(glm::smoothstep(1.5f, 6.0f, apart), 0.35f) : glm::smoothstep(5.0f, 20.0f, apart);
+                if (ring > 0.0f) alpha *= glm::smoothstep(ring, ring * 0.6f, std::max(side, std::abs((t0 + t1) * 0.5f - mid)));
+                const float strong = axis ? 1.0f : glm::smoothstep(20.0f, 160.0f, apart);
+                glm::vec4 pc = axis ? col : glm::vec4(glm::vec3(shade), glm::mix(dim, bright, strong));
+                pc.a *= alpha;
+                if (pc.a < 0.004f) continue;
+                r.drawStreak(lift(a) * kUnits, lift(b) * kUnits, px * (1.0f + 0.6f * strong) * kUnits, pc, keel::kWhiteTexture);
+            }
+        };
+        for (int level = 0; level < levels; ++level) {
+            const float s = first * std::pow(10.0f, float(level)), ring = count * s;
+            const bool top = level == levels - 1;
+            for (int dir = 0; dir < 2; ++dir) {
+                const float c0 = snapTo(dir ? cv : cu, s), mid = dir ? cu : cv;
+                for (int i = -count; i <= count; ++i) {
+                    const float at = c0 + float(i) * s;
+                    if (std::abs(at) < s * 0.01f) continue; // (the axis: drawn on its own)
+                    if (!top && std::abs(snapTo(at, s * 10.0f) - at) < s * 0.01f) continue; // (the next set's)
+                    line(dir, at, mid - ring, mid + ring, s, ring, {}, false);
                 }
+            }
+        }
+        // The axes: right through, as far as the widest set reaches.
+        const float reach = count * first * std::pow(10.0f, float(levels - 1));
+        for (int dir = 0; dir < 2; ++dir) {
+            const glm::vec4 col = dir ? (n.x > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.9f, 0.25f, 0.25f, 0.9f))
+                                      : (n.z > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.25f, 0.45f, 0.95f, 0.9f));
+            const float mid = dir ? cu : cv;
+            line(dir, 0.0f, mid - reach, mid + reach, first, 0.0f, col, true);
         }
     }
     if (tab_ == Tab::Print) drawPrintBed(r, light);

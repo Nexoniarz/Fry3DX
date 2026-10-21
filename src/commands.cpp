@@ -88,6 +88,8 @@ int CommandSearch::draw(const std::vector<Command>& all, const std::vector<std::
         open = false;
         return -1;
     }
+    // F3 or Ctrl+Space again: closed (not the press that opened it)
+    if (!focus && (ImGui::IsKeyPressed(ImGuiKey_F3, false) || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)))) open = false;
     if (focus) ImGui::SetKeyboardFocusHere(), focus = false;
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##find", "Type what you want to do: round edges, hole, export STL...", text, sizeof text);

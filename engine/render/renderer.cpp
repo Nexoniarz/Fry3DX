@@ -745,7 +745,7 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
     p.exposure *= glm::mix(1.0f, 0.3f, std::clamp(p.frame.weather.z, 0.0f, 1.0f));
     const float tanY = std::tan(glm::radians(camera_.fovY) * 0.5f);
     p.post.aoStrength = std::clamp(r_ssao.f(), 0.0f, 1.0f); // (the TAA fields were set with the camera above)
-    p.post.aoRadius = std::max(r_ssao_radius.f(), 1.0f);
+    p.post.aoRadius = std::max(r_ssao_radius.f(), 0.001f); // (small for close-up work: a modeller sets it to its view)
     p.post.bloomStrength = std::clamp(r_bloom.f(), 0.0f, 1.0f);
     p.post.saturation = r_saturation.f();
     p.post.vignette = r_vignette.f();
