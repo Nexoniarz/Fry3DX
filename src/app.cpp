@@ -478,6 +478,11 @@ public:
             for (int i = 0; i <= 40; ++i) self->paintAt(ImVec2(p0.x + (p1.x - p0.x) * float(i) / 40, p0.y + (p1.y - p0.y) * float(i) / 40), i == 0);
             self->endStroke();
         }, "Fry3DX: fry_stroke x0 y0 x1 y1: a brush stroke across the view (0..1)");
+        static keel::Cmd stencil("fry_stencil", [](const keel::Args& a) { // a box stencil, 0..1 of the view
+            if (a.size() < 5 || !self->viewReady()) return;
+            const ImVec2 p0 = vp(a[1], a[2]), p1 = vp(a[3], a[4]);
+            self->stencil_ = {p0, ImVec2(p1.x, p0.y), p1, ImVec2(p0.x, p1.y)}, self->stencilOn_ = true;
+        }, "Fry3DX: fry_stencil x0 y0 x1 y1: a box stencil for painting (0..1 of the view)");
         static keel::Cmd paste("fry_pastefile", [](const keel::Args& a) { if (a.size() > 1) self->floatFromFile(a[1]); }, "Fry3DX: place a picture file onto the selected object");
         static keel::Cmd corner("fry_corner", [](const keel::Args& a) {
             if (PictureLayer* l = self->editLayer(); l && a.size() > 3) l->corners[size_t(std::clamp(std::stoi(a[1]), 0, 3))] = {std::stof(a[2]), std::stof(a[3])};
@@ -885,6 +890,8 @@ private:
     bool sculpting_ = false;
     SculptBrush sculptBrush_ = SculptBrush::Draw;
     float sculptStrength_ = 0.5f, sculptPx_ = 60.0f; // (its own brush size: sculpting wants a bigger one than painting)
+    bool paintMirror_ = false, stencilOn_ = false, drawingStencil_ = false;
+    std::vector<ImVec2> stencil_; // (on the screen)
     bool sculptMirror_ = false; // the same on the other side (left and right: the object's Y)
     struct SculptStroke {
         bool active = false, haveLast = false, waiting = false;
@@ -2242,9 +2249,14 @@ private:
     }
     // One dab of the brush on the model: on every face near it, into the picture where that face
     // lies (so it carries on across the seams between pieces of the layout).
-    void dab3D(Object& o, const glm::vec3& at, float radius) {
+    // One dab of paint at a point of the object (the world), on the faces towards `eye` (the
+    // mirrored dab: towards the eye mirrored). The stencil: only where the surface shows inside
+    // it on the screen (the mirrored dab: where its mirror image does, `back` taking it there).
+    void dab3D(Object& o, const glm::vec3& at, float radius, const glm::vec3* eyeAt = nullptr, const glm::mat4* back = nullptr) {
         Image& im = *paint_.image;
         const glm::mat4 m = objectMatrix(o);
+        const glm::vec3 eye = eyeAt ? *eyeAt : eye_;
+        const bool stencil = stencilOn_ && stencil_.size() >= 3;
         const glm::vec2 size(float(im.w), float(im.h));
         const float inner = std::clamp(hardness_, 0.0f, 0.999f) * radius;
         for (size_t f = 0; f < o.mesh.faces.size(); ++f) {
@@ -2260,7 +2272,7 @@ private:
                 if (glm::any(glm::lessThan(at, lo)) || glm::any(glm::greaterThan(at, hi))) continue;
                 const glm::vec3 n = glm::cross(w[1] - w[0], w[2] - w[0]);
                 const float area3 = glm::length(n) * 0.5f;
-                if (area3 < 1e-12f || glm::dot(n, eye_ - w[0]) <= 0 || std::abs(glm::dot(glm::normalize(n), at - w[0])) > radius) continue;
+                if (area3 < 1e-12f || glm::dot(n, eye - w[0]) <= 0 || std::abs(glm::dot(glm::normalize(n), at - w[0])) > radius) continue;
                 const float areaPx = std::abs((px[1].x - px[0].x) * (px[2].y - px[0].y) - (px[2].x - px[0].x) * (px[1].y - px[0].y)) * 0.5f;
                 if (areaPx < 1e-6f) continue;
                 // The dab's middle on the picture, and how far it reaches there.
@@ -2287,6 +2299,10 @@ private:
                         const glm::vec3 p = w[0] * l[0] + w[1] * l[1] + w[2] * l[2];
                         const float d = glm::length(p - at);
                         if (d >= radius) continue;
+                        if (stencil) {
+                            ImVec2 sp;
+                            if (!project(back ? glm::vec3(*back * glm::vec4(p, 1.0f)) : p, sp) || !insidePolygon(sp, stencil_)) continue;
+                        }
                         const float s = d <= inner ? 1.0f : 1.0f - (d - inner) / (radius - inner);
                         paint_.stroke.put(im, x, y, s * s * (3 - 2 * s));
                     }
@@ -2316,11 +2332,18 @@ private:
         const glm::vec3 at = ray.origin + ray.dir * h.t;
         const float radius = brushPx_ * pixelSize(at);
         const float gap = glm::distance(at, paint_.last);
+        // (painting both sides: the same dab mirrored across the object's own Y, its left and right)
+        const glm::mat4 m = objectMatrix(*o), mirror = m * glm::scale(glm::mat4(1.0f), glm::vec3(1, -1, 1)) * glm::inverse(m);
+        const glm::vec3 eyeMirrored = glm::vec3(mirror * glm::vec4(eye_, 1.0f));
+        auto dab = [&](const glm::vec3& p) {
+            dab3D(*o, p, radius);
+            if (paintMirror_) dab3D(*o, glm::vec3(mirror * glm::vec4(p, 1.0f)), radius, &eyeMirrored, &mirror);
+        };
         if (paint_.haveLast && gap < radius * 8) {
             const int steps = std::max(1, int(std::ceil(gap / (radius * 0.3f))));
-            for (int i = 1; i <= steps; ++i) dab3D(*o, glm::mix(paint_.last, at, float(i) / float(steps)), radius);
+            for (int i = 1; i <= steps; ++i) dab(glm::mix(paint_.last, at, float(i) / float(steps)));
         } else
-            dab3D(*o, at, radius);
+            dab(at);
         paint_.last = at, paint_.haveLast = true;
     }
     void pickColor(const Object& o, glm::vec2 uv) {
@@ -5294,6 +5317,16 @@ private:
     // Painting: on the model under the mouse.
     void paintViewport(ImGuiIO& io) {
         if (sculpting_) return sculptViewport(io);
+        if (drawingStencil_) { // (drawing the stencil: a drag round the area)
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && mouseInView(io)) {
+                if (stencil_.empty() || std::hypot(stencil_.back().x - io.MousePos.x, stencil_.back().y - io.MousePos.y) > 3) stencil_.push_back(io.MousePos);
+            } else if (!stencil_.empty()) {
+                drawingStencil_ = false, stencilOn_ = stencil_.size() >= 3;
+                if (!stencilOn_) stencil_.clear();
+                say(stencilOn_ ? "Stencil on: paint goes only inside it" : "Too small for a stencil: drag round an area");
+            }
+            return;
+        }
         if (paint_.waiting) {
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) paint_.waiting = false;
             else if (pickObject(mouseRay(io.MousePos), 0, true).object) paint_.waiting = false, paintAt(io.MousePos, true);
@@ -5793,6 +5826,10 @@ private:
                     }
                 }
             }
+            if (stencil_.size() >= 2) { // (the stencil's edge; where paint can't go, shaded)
+                dl->AddPolyline(stencil_.data(), int(stencil_.size()), stencilOn_ || drawingStencil_ ? kAccent : IM_COL32(200, 200, 205, 120), drawingStencil_ ? 0 : ImDrawFlags_Closed, 2.0f);
+                if (stencilOn_ && !drawingStencil_ && stencil_.size() >= 3) dl->AddConcavePolyFilled(stencil_.data(), int(stencil_.size()), IM_COL32(255, 160, 90, 28));
+            }
             if (sculpting_) {
                 if (mouseInView(io)) dl->AddCircle(io.MousePos, sculptPx_, io.KeyCtrl ? IM_COL32(120, 180, 255, 220) : IM_COL32(255, 255, 255, 200), 40, 1.5f);
             } else if (mouseInView(io) && !editLayer() && paintTool_ != PaintTool::Picture)
@@ -6193,6 +6230,8 @@ private:
         add("shape.bridge", "Bridge two faces", "Shape", "", [this] { bridgeNow(); }, editing, "tunnel connect");
         add("shape.soft", "Soft selection on / off", "Shape", "Shift+O", [this] { softSel_ = !softSel_; }, {}, "proportional falloff");
         add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
+        add("paint.mirror", "Paint both sides (mirrored)", "Paint", "", [this] { paintMirror_ = !paintMirror_, say(paintMirror_ ? "Painting both sides" : "Painting one side"); }, {}, "symmetry symmetric");
+        add("paint.stencil", "Draw a paint stencil (paint only inside it)", "Paint", "", [this] { setTab(Tab::Paint), drawingStencil_ = true, stencil_.clear(); }, {}, "mask masking tape area");
         add("shape.crease", "Crease the picked edges (stay sharp when smoothed)", "Shape", "Shift+E", [this] { creaseSelected(); }, editing, "sharp hard edge subdivision smooth");
         add("shape.slide", "Slide the points along their edges...", "Shape", "Alt+G", [this] { startSlide(); }, editing, "edge slide vertex slide");
         add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_, say(liveMirror_ ? "Mirror editing on: both sides change together" : "Mirror editing off"); }, {}, "symmetry symmetric x");
@@ -6705,6 +6744,18 @@ private:
             ImGui::SliderFloat("##hard", &hardness_, 0.0f, 1.0f, "hard edge %.2f");
             ImGui::SetNextItemWidth(w);
             ImGui::SliderFloat("##strength", &paintColor_.a, 0.02f, 1.0f, "strength %.2f");
+            ImGui::Checkbox("Both sides (mirrored, X)", &paintMirror_);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("What you paint on one side goes on the other too, mirrored (left and right: the object's own Y)");
+            ImGui::SeparatorText("Stencil");
+            if (stencil_.size() >= 3) {
+                ImGui::Checkbox("Paint only inside it", &stencilOn_);
+                if (ImGui::Button("Draw it again", ImVec2(w * 0.5f - 2, 0))) drawingStencil_ = true, stencil_.clear();
+                ImGui::SameLine(0, 4);
+                if (ImGui::Button("Take it off", ImVec2(w * 0.5f - 2, 0))) stencil_.clear(), stencilOn_ = false;
+            } else {
+                if (ImGui::Button(drawingStencil_ ? "Drawing: drag round the area..." : "Draw a stencil", ImVec2(w, 0))) drawingStencil_ = !drawingStencil_, stencil_.clear();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drag round an area on the screen: paint goes only inside it (it stays put on the screen as you turn the view)");
+            }
         }
         if (paintTool_ == PaintTool::Fill) {
             ImGui::SetNextItemWidth(w);
@@ -7096,6 +7147,8 @@ private:
             if (ImGui::SmallButton("x")) drop = i;
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete it");
             if (ImGui::BeginPopupContextItem("menu")) {
+                ImGui::SetNextItemWidth(180);
+                undoable([&] { return ImGui::SliderFloat("##op", &l.opacity, 0.0f, 1.0f, "see-through %.2f"); });
                 if (ImGui::MenuItem("Paint it in for good")) merge = i;
                 if (ImGui::MenuItem("Delete")) drop = i;
                 ImGui::EndPopup();
