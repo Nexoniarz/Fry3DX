@@ -249,6 +249,13 @@ struct PrintInfo {
     glm::vec3 lo{0.0f}, hi{0.0f};
     keel::ModelId overhang{};
     bool hasOverhang = false;
+    // Walls too thin to print: how thick at each face (worked out again only when its shape or
+    // size changes: moving or turning it doesn't), how many under the least, the thinnest.
+    uint64_t thickKey = ~0ull;
+    std::vector<float> thick;
+    int thinFaces = 0;
+    float thinnest = 1e30f;
+    keel::ModelId thin{};
 };
 
 keel::Cvar fry_printer("fry_printer", "0", keel::CVAR_ARCHIVE, "Fry3DX: the 3D printer (a number in the Print tab's list)");
@@ -931,7 +938,8 @@ private:
     // The Print tab.
     PrintTool printTool_ = PrintTool::None;
     std::vector<glm::vec3> measure_;
-    bool measureSnap_ = true, showOverhangs_ = true, sizing_ = false;
+    bool measureSnap_ = true, showOverhangs_ = true, sizing_ = false, showThin_ = true;
+    float minWall_ = 0.0008f; // (m: the thinnest wall that prints well, twice a 0.4 mm nozzle)
     float overhangDeg_ = 45.0f, infill_ = 15.0f;
     int material_ = 0;
     std::map<uint32_t, PrintInfo> printInfos_;
@@ -3007,7 +3015,7 @@ private:
     }
     const PrintInfo& printInfo(const Object& o) {
         PrintInfo& p = printInfos_[o.id];
-        uint64_t key = versions_[o.id] * 1000003ull + uint64_t(overhangDeg_ * 10);
+        uint64_t key = versions_[o.id] * 1000003ull + uint64_t(overhangDeg_ * 10) + uint64_t(minWall_ * 1e5f) * 7919ull;
         for (float f : {o.position.x, o.position.y, o.position.z, o.rotation.x, o.rotation.y, o.rotation.z, o.rotation.w, o.scale.x, o.scale.y, o.scale.z}) {
             uint32_t b;
             std::memcpy(&b, &f, 4);
@@ -3038,6 +3046,33 @@ private:
         if (p.hasOverhang) {
             km.submeshes.push_back({0, uint32_t(km.indices.size()), 0});
             p.overhang = r_->updateModel(std::format("fry:overhang:{}", o.id), km);
+        }
+        // Thin walls (only of a closed shape: an open one has no inside to be thick).
+        uint64_t thickKey = versions_[o.id] * 1000003ull;
+        for (float f : {o.scale.x, o.scale.y, o.scale.z}) {
+            uint32_t b;
+            std::memcpy(&b, &f, 4);
+            thickKey = (thickKey ^ b) * 1099511628211ull;
+        }
+        if (p.thickKey != thickKey || p.thick.size() != p.world.faces.size())
+            p.thickKey = thickKey, p.thick = p.check.closed() ? fry::wallThickness(p.world) : std::vector<float>(p.world.faces.size(), 1e30f);
+        p.thinFaces = 0, p.thinnest = 1e30f;
+        km.vertices.clear(), km.indices.clear(), km.submeshes.clear();
+        for (size_t f = 0; f < p.world.faces.size(); ++f) {
+            p.thinnest = std::min(p.thinnest, p.thick[f]);
+            if (p.thick[f] >= minWall_) continue;
+            ++p.thinFaces;
+            const glm::vec3 n = faceNormal(p.world, int(f));
+            for (const auto& t : triangulate(p.world, int(f)))
+                for (int k : t) {
+                    const glm::vec3 q = p.world.verts[size_t(k)] + n * 0.0005f;
+                    km.indices.push_back(uint32_t(km.vertices.size()));
+                    km.vertices.push_back({{q.x, q.y, q.z}, {n.x, n.y, n.z}, {0, 0}, {0, 0}});
+                }
+        }
+        if (p.thinFaces) {
+            km.submeshes.push_back({0, uint32_t(km.indices.size()), 0});
+            p.thin = r_->updateModel(std::format("fry:thin:{}", o.id), km);
         }
         return p;
     }
@@ -3081,6 +3116,13 @@ private:
                 if (o.visible)
                     if (const PrintInfo& p = printInfo(o); p.hasOverhang)
                         r.drawModel(p.overhang, glm::scale(glm::mat4(1.0f), glm::vec3(kUnits)), glm::vec4(0.95f, 0.15f, 0.1f, 0.55f), nullptr, &flat, false);
+        }
+        if (showThin_) {
+            const keel::ModelLighting flat{{glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f)}, 0.0f};
+            for (const Object& o : scene_.objects)
+                if (o.visible)
+                    if (const PrintInfo& p = printInfo(o); p.thinFaces)
+                        r.drawModel(p.thin, glm::scale(glm::mat4(1.0f), glm::vec3(kUnits)), glm::vec4(1.0f, 0.8f, 0.1f, 0.7f), nullptr, &flat, false);
         }
     }
     void putOnBed() {
@@ -3380,6 +3422,16 @@ private:
         ImGui::SetNextItemWidth(w);
         ImGui::SliderFloat("##hang", &overhangDeg_, 20.0f, 80.0f, "steeper than %.0f degrees");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far from upright a face can lean over before it needs support (45 for most printers)");
+        int thin = 0;
+        float thinnest = 1e30f;
+        for (Object* o : targets) thin += printInfo(*o).thinFaces, thinnest = std::min(thinnest, printInfo(*o).thinnest);
+        if (thin) bad(std::format("{} face{} on walls thinner than {:.1f} mm (yellow), the thinnest {:.2f} mm: it may not print there, or break.", thin, thin == 1 ? "" : "s", minWall_ * 1000, thinnest * 1000));
+        else if (all.openEdges == 0) good(std::format("Walls {:.1f} mm thick or more", minWall_ * 1000).c_str());
+        ImGui::Checkbox("Show thin walls in yellow", &showThin_);
+        float mm = minWall_ * 1000;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##minwall", &mm, 0.2f, 5.0f, "thinner than %.1f mm")) minWall_ = mm / 1000;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The thinnest wall your printer makes well: about twice the nozzle (0.8 mm for a 0.4 mm nozzle)");
 
         ImGui::SeparatorText("Material");
         ImGui::SetNextItemWidth(w);

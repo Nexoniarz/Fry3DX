@@ -116,4 +116,21 @@ bool TriangleTree::blocked(const glm::vec3& o, const glm::vec3& d, float maxT, i
     return false;
 }
 
+std::vector<float> wallThickness(const Mesh& m) {
+    const TriangleTree tree(m, glm::mat4(1.0f));
+    std::vector<float> out(m.faces.size(), 1e30f);
+    for (size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& fv = m.faces[f];
+        if (fv.size() < 3) continue;
+        glm::vec3 c(0.0f);
+        for (int v : fv) c += m.verts[size_t(v)];
+        c /= float(fv.size());
+        const glm::vec3 n = faceNormal(m, int(f));
+        // (a hair inside, so the face itself isn't what it meets)
+        const glm::vec3 from = c - n * 1e-6f;
+        if (auto h = tree.nearest(from, -n)) out[f] = h->t + 1e-6f;
+    }
+    return out;
+}
+
 } // namespace fry

@@ -449,6 +449,15 @@ int main() {
         CHECK(checkForPrint(o).closed() && checkForPrint(o).volume < 0.05f * 0.04f * 0.01f, "an O has its hole (%g m3)", checkForPrint(o).volume);
         CHECK(makeText({}, "x", st, &err).faces.empty() && !err.empty(), "no font: nothing, and why");
     }
+    // Wall thickness: a box 2 mm thin one way is 2 mm thick on its big faces, 1 m the other ways.
+    {
+        Mesh slab = makeCube(1.0f);
+        transform(slab, glm::scale(glm::mat4(1), glm::vec3(1.0f, 1.0f, 0.002f)));
+        const std::vector<float> t = wallThickness(slab);
+        int thin = 0, wide = 0;
+        for (size_t f = 0; f < t.size(); ++f) thin += std::abs(t[f] - 0.002f) < 1e-5f, wide += std::abs(t[f] - 1.0f) < 1e-4f;
+        CHECK(thin == 2 && wide == 4, "wall thickness: 2 faces 2 mm, 4 faces 1 m (%d, %d)", thin, wide);
+    }
     // The tree of boxes finds the same nearest hit as trying every triangle (and the same "in the way").
     {
         Mesh m = makeSphere(32, 16, 1.0f);

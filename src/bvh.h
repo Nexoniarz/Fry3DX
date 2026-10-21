@@ -45,6 +45,10 @@ private:
     int build(int first, int count);
 };
 
+// How thick the shape is at each face: from its middle straight in (against its normal) to the
+// surface on the other side (1e30 where nothing's there: an open shape, a face turned in).
+std::vector<float> wallThickness(const Mesh& m);
+
 // Where a ray meets a triangle (Möller–Trumbore), in the ray's lengths.
 std::optional<float> rayTriangle(const glm::vec3& origin, const glm::vec3& dir, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c);
 
