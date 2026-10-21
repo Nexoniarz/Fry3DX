@@ -113,6 +113,9 @@ void applyMaterial(Object& o, const MaterialPreset& m) {
 
 Mesh finishedMesh(const Object& o, bool mirrorOnly) {
     Mesh m = o.mesh;
+    std::set<std::pair<int, int>> creases;
+    for (const auto& [a, b] : o.creases) // (only those still edges of its points)
+        if (a >= 0 && b >= 0 && a < int(m.verts.size()) && b < int(m.verts.size())) creases.insert({std::min(a, b), std::max(a, b)});
     for (int axis = 0; axis < 3; ++axis) {
         if (!(o.mirror & (1 << axis))) continue;
         glm::vec3 s(1.0f);
@@ -127,6 +130,10 @@ Mesh finishedMesh(const Object& o, bool mirrorOnly) {
             if (std::abs(m.verts[i][axis]) < eps) to[i] = int(i - before);
         for (auto& f : m.faces)
             for (int& v : f) v = to[size_t(v)];
+        for (const auto& [a, b] : std::set(creases)) { // (the creases mirrored with it)
+            const int p = to[size_t(a) + before], q = to[size_t(b) + before];
+            creases.insert({std::min(p, q), std::max(p, q)});
+        }
         std::erase_if(m.faces, [](const std::vector<int>& f) { return std::set<int>(f.begin(), f.end()).size() < 3; });
         // (a face lying on the mirror line would now be there twice, back to back: both go)
         std::map<std::vector<int>, int> seen;
@@ -140,11 +147,23 @@ Mesh finishedMesh(const Object& o, bool mirrorOnly) {
             std::sort(k.begin(), k.end());
             return seen[k] > 1;
         });
+        { // (the creases numbered as removeUnused is about to number the points)
+            std::vector<int> num(m.verts.size(), -1);
+            for (const auto& f : m.faces)
+                for (int v : f) num[size_t(v)] = 0;
+            int next = 0;
+            for (int& n : num)
+                if (n == 0) n = next++;
+            std::set<std::pair<int, int>> now;
+            for (const auto& [a, b] : creases)
+                if (num[size_t(a)] >= 0 && num[size_t(b)] >= 0) now.insert({std::min(num[size_t(a)], num[size_t(b)]), std::max(num[size_t(a)], num[size_t(b)])});
+            creases = std::move(now);
+        }
         removeUnused(m);
     }
     if (mirrorOnly) return m;
-    if (o.round > 0.0f) bevelEdges(m, sharpEdges(m, o.roundAngle), o.round, o.roundSteps);
-    for (int i = 0; i < std::min(o.smoothLevels, 4); ++i) subdivide(m, true, o.smoothKeepSharp ? 30.0f : 180.0f);
+    if (o.round > 0.0f) bevelEdges(m, sharpEdges(m, o.roundAngle), o.round, o.roundSteps), creases.clear(); // (rounded: its points renumbered)
+    for (int i = 0; i < std::min(o.smoothLevels, 4); ++i) subdivide(m, true, o.smoothKeepSharp ? 30.0f : 180.0f, &creases);
     return m;
 }
 
@@ -229,6 +248,11 @@ std::string sceneText(const Scene& scene) {
         if (o.mirror) out << "  mirror " << o.mirror << "\n";
         if (o.round > 0.0f) out << "  round " << o.round << " " << o.roundSteps << " " << o.roundAngle << "\n";
         if (o.smoothLevels) out << "  subdivide " << o.smoothLevels << " " << o.smoothKeepSharp << "\n";
+        if (!o.creases.empty()) {
+            out << "  crease";
+            for (const auto& [a, b] : o.creases) out << " " << a << " " << b;
+            out << "\n";
+        }
         if (!o.pictureFile.empty()) out << "  picture " << quoted(o.pictureFile) << "\n";
         for (const PictureLayer& l : o.layers) {
             if (l.file.empty()) continue;
@@ -356,6 +380,8 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
         } else if (word == "mirror") l >> o->mirror;
         else if (word == "round") l >> o->round >> o->roundSteps >> o->roundAngle;
         else if (word == "subdivide") l >> o->smoothLevels >> o->smoothKeepSharp;
+        else if (word == "crease")
+            for (int a, b; l >> a >> b;) o->creases.insert({std::min(a, b), std::max(a, b)});
         else if (word == "picture") o->pictureFile = readQuoted(l);
         else if (word == "layer") {
             PictureLayer p;

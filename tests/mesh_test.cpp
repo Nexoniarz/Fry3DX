@@ -449,6 +449,28 @@ int main() {
         CHECK(checkForPrint(o).closed() && checkForPrint(o).volume < 0.05f * 0.04f * 0.01f, "an O has its hole (%g m3)", checkForPrint(o).volume);
         CHECK(makeText({}, "x", st, &err).faces.empty() && !err.empty(), "no font: nothing, and why");
     }
+    // Creases: a cube smoothed with all its edges creased stays a cube; with none it rounds off;
+    // mirrored, the copy's creases hold too; and they're saved.
+    {
+        Object o;
+        o.id = 1, o.mesh = makeCube(1.0f), o.smoothLevels = 2;
+        const float round = checkForPrint(finishedMesh(o)).volume;
+        for (auto [a, b] : edges(o.mesh)) o.creases.insert({a, b});
+        const float kept = checkForPrint(finishedMesh(o)).volume;
+        CHECK(round < 0.8f && std::abs(kept - 1.0f) < 1e-4f, "creased all round: still a cube (%.3f; smooth %.3f)", kept, round);
+        Object half;
+        half.id = 2, half.mesh = makeCube(1.0f), half.smoothLevels = 2, half.mirror = 1;
+        transform(half.mesh, glm::translate(glm::mat4(1), glm::vec3(0.5f, 0, 0)));
+        for (auto [a, b] : edges(half.mesh)) half.creases.insert({a, b});
+        const float both = checkForPrint(finishedMesh(half)).volume;
+        CHECK(std::abs(both - 2.0f) < 1e-3f, "mirrored, creased: two cubes' worth, square (%.3f)", both);
+        Scene sc;
+        sc.objects.push_back(o);
+        const auto file = (std::filesystem::temp_directory_path() / "fry3dx_test" / "crease.fry").string();
+        std::filesystem::create_directories(std::filesystem::path(file).parent_path());
+        auto back = saveScene(file, sc) ? loadScene(file) : std::nullopt;
+        CHECK(back && back->objects.size() == 1 && back->objects[0].creases == o.creases, "creases saved and back");
+    }
     // A slicer's layer: a 1 m cube cut halfway is a 4 m outline, a cylinder's a circle's.
     {
         float len = 0;

@@ -267,11 +267,11 @@ void bevelEdges(Mesh& m, const std::set<std::pair<int, int>>& want, float width,
 
 // ── Subdivide (Catmull–Clark) ──
 
-void subdivide(Mesh& m, bool smooth, float keepAngle) {
+void subdivide(Mesh& m, bool smooth, float keepAngle, std::set<std::pair<int, int>>* creases) {
     if (m.faces.empty()) return;
     const auto d = directed(m);
     const std::set<Edge> sharp = keepAngle < 179.9f ? sharpEdges(m, keepAngle) : std::set<Edge>{};
-    auto crease = [&](int a, int b) { return !d.count({a, b}) || !d.count({b, a}) || sharp.count(key(a, b)); };
+    auto crease = [&](int a, int b) { return !d.count({a, b}) || !d.count({b, a}) || sharp.count(key(a, b)) || (creases && creases->count(key(a, b))); };
     Mesh out;
     out.verts = m.verts;
     std::vector<int> facePt(m.faces.size());
@@ -316,6 +316,23 @@ void subdivide(Mesh& m, bool smooth, float keepAngle) {
         const size_t n = fv.size();
         for (size_t i = 0; i < n; ++i)
             out.faces.push_back({fv[i], edgePt[key(fv[i], fv[(i + 1) % n])], facePt[f], edgePt[key(fv[(i + n - 1) % n], fv[i])]});
+    }
+    if (creases) { // (each crease is now two edges, through its new middle point; numbered as removeUnused will)
+        std::vector<int> to(out.verts.size(), -1);
+        int next = 0;
+        std::vector<bool> used(out.verts.size());
+        for (const auto& f : out.faces)
+            for (int v : f) used[size_t(v)] = true;
+        for (size_t v = 0; v < used.size(); ++v)
+            if (used[v]) to[v] = next++;
+        std::set<std::pair<int, int>> now;
+        for (const auto& [a, b] : *creases) {
+            const auto it = edgePt.find(key(a, b));
+            if (it == edgePt.end()) continue; // (not an edge any more)
+            for (const auto& [p, q] : {std::pair{a, it->second}, std::pair{it->second, b}})
+                if (to[size_t(p)] >= 0 && to[size_t(q)] >= 0) now.insert(key(to[size_t(p)], to[size_t(q)]));
+        }
+        *creases = std::move(now);
     }
     m = std::move(out);
     removeUnused(m);

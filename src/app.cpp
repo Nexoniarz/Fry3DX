@@ -5431,6 +5431,7 @@ private:
         if (key(ImGuiKey_F12)) dialog(5);
         if (key(ImGuiKey_Q)) setTool(Tool::Select);
         if (key(ImGuiKey_W)) setTool(Tool::Move);
+        if (key(ImGuiKey_E) && shift && mode_ == Mode::Edit) return creaseSelected();
         if (key(ImGuiKey_E)) setTool(Tool::Rotate);
         if (key(ImGuiKey_R)) setTool(Tool::Scale);
         if (key(ImGuiKey_D)) setTool(Tool::Draw);
@@ -5789,6 +5790,16 @@ private:
             if (ed->hasFinish() && ed->mirror && shading() != Shading::Wire) // (the mirrored half: faint)
                 lines(*ed, shownMesh(*ed), IM_COL32(20, 20, 25, 70), 1.0f, false);
             lines(*ed, ed->mesh, shading() == Shading::Wire ? IM_COL32(230, 230, 235, 230) : IM_COL32(12, 12, 15, 235), 1.3f, true);
+        }
+        if (ed && !ed->creases.empty()) { // (creased edges: smoothing keeps them sharp)
+            const glm::mat4 m = objectMatrix(*ed);
+            const int n = int(ed->mesh.verts.size());
+            for (auto [a, b] : ed->creases) {
+                ImVec2 sa, sb;
+                if (a < n && b < n && (xray_ || (pointSeen(*ed, a) && pointSeen(*ed, b))) && project(glm::vec3(m * glm::vec4(ed->mesh.verts[size_t(a)], 1.0f)), sa) &&
+                    project(glm::vec3(m * glm::vec4(ed->mesh.verts[size_t(b)], 1.0f)), sb))
+                    dl->AddLine(sa, sb, IM_COL32(230, 70, 200, 255), 2.5f);
+            }
         }
         if (Object* o = ed) {
             const glm::mat4 m = objectMatrix(*o);
@@ -6151,6 +6162,7 @@ private:
         add("shape.bridge", "Bridge two faces", "Shape", "", [this] { bridgeNow(); }, editing, "tunnel connect");
         add("shape.soft", "Soft selection on / off", "Shape", "Shift+O", [this] { softSel_ = !softSel_; }, {}, "proportional falloff");
         add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
+        add("shape.crease", "Crease the picked edges (stay sharp when smoothed)", "Shape", "Shift+E", [this] { creaseSelected(); }, editing, "sharp hard edge subdivision smooth");
         add("shape.slide", "Slide the points along their edges...", "Shape", "Alt+G", [this] { startSlide(); }, editing, "edge slide vertex slide");
         add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_, say(liveMirror_ ? "Mirror editing on: both sides change together" : "Mirror editing off"); }, {}, "symmetry symmetric x");
         add("view.solid", "Show: solid", "View", "Z", [this] { shading_ = Shading::Solid; });
@@ -8109,6 +8121,28 @@ private:
         std::string text;
         for (const std::string& d : did) text += (text.empty() ? "" : ", ") + d;
         say("Repaired: " + text + (still ? std::format(". {} still not closed (see the Print tab)", still) : ". Ready to print"));
+    }
+    // Crease (Shift+E): the picked edges (or those between picked points / round picked faces)
+    // kept sharp when the shape's smoothed; again: not.
+    void creaseSelected() {
+        Object* o = editing();
+        if (!o) return say("Crease works on a shape being edited (Tab)");
+        std::set<std::pair<int, int>> picked;
+        if (elem_ == Elem::Edge)
+            for (auto [a, b] : selEdges_) picked.insert({std::min(a, b), std::max(a, b)});
+        else {
+            const std::set<int> pts = selectedPoints();
+            for (const auto& e : adjacencyOf(*o, o->mesh).edges)
+                if (pts.count(e[0]) && pts.count(e[1])) picked.insert({e[0], e[1]});
+        }
+        if (picked.empty()) return say("Pick the edges to crease first (Edges, 2)");
+        pushUndo();
+        const bool all = std::all_of(picked.begin(), picked.end(), [&](const auto& e) { return o->creases.count(e) > 0; });
+        for (const auto& e : picked) all ? (void)o->creases.erase(e) : (void)o->creases.insert(e);
+        touched(o->id);
+        say(all ? std::format("{} edge{} smooth again", picked.size(), picked.size() == 1 ? "" : "s")
+                : std::format("{} edge{} creased: smoothing keeps {} sharp{}", picked.size(), picked.size() == 1 ? "" : "s", picked.size() == 1 ? "it" : "them",
+                              o->smoothLevels ? "" : " (turn on Smooth out to see)"));
     }
     // Slide (Alt+G): the picked points glide along their edges, each along the edge that goes
     // most the way the mouse goes, never past its other end. Click: done. Esc / right click: as it was.

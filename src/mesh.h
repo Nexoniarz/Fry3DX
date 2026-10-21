@@ -75,8 +75,9 @@ void bevelEdges(Mesh& m, const std::set<std::pair<int, int>>& edges, float width
 // Edges where the faces meet sharper than `angle` degrees.
 std::set<std::pair<int, int>> sharpEdges(const Mesh& m, float angle);
 // Every face cut into four-sided pieces; `smooth` rounds it (Catmull–Clark) — edges sharper
-// than `keepAngle` degrees stay sharp (180: none do).
-void subdivide(Mesh& m, bool smooth, float keepAngle = 180.0f);
+// than `keepAngle` degrees stay sharp (180: none do), and the `creases` (point pairs, the lower
+// first) too: they're made the new edges along them, for the next time round.
+void subdivide(Mesh& m, bool smooth, float keepAngle = 180.0f, std::set<std::pair<int, int>>* creases = nullptr);
 // The ring of four-sided faces across an edge, cut round the middle `cuts` times. Returns the new
 // points (empty if the edge has no four-sided face).
 std::vector<int> loopCut(Mesh& m, std::pair<int, int> edge, int cuts = 1);

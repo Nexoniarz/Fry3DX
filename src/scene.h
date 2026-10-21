@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -64,6 +65,7 @@ struct Object {
     int roundSteps = 3;
     int smoothLevels = 0;
     bool smoothKeepSharp = false;
+    std::set<std::pair<int, int>> creases; // edges (points, the lower first) smoothing keeps sharp
     bool hasFinish() const { return mirror || round > 0.0f || smoothLevels > 0; }
     // A painted picture on it: where each face corner sits on it (0..1), and the picture
     // (shared with the undo steps until it's painted on again). Saved beside the .fry as a PNG.
