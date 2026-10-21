@@ -709,6 +709,30 @@ int main() {
         CHECK(!held.empty() && std::abs(boundsMax(g).z - 0.8f) < 0.01f && closed(g), "grab pulls the middle up with it (%.3f)", boundsMax(g).z);
     }
 
+    { // editable cuts: a box with a bar through it, the bar still an object
+        Scene sc;
+        Object box, bar;
+        box.id = 1, box.name = "Box", box.mesh = makeCube(2.0f);
+        bar.id = 2, bar.name = "Bar", bar.mesh = makeCube(1.0f), bar.scale = {3, 1, 1}, bar.cuts = 1;
+        sc.objects = {box, bar};
+        sc.nextId = 3;
+        CHECK(cutTarget(sc, sc.objects[1]) == &sc.objects[0] && hasCuts(sc, sc.objects[0]) && !hasCuts(sc, sc.objects[1]), "the bar cuts the box");
+        const float v = checkForPrint(cutMesh(sc, sc.objects[0])).volume;
+        CHECK(std::abs(v - 6.0f) < 1e-3f, "a 1x1 tunnel through a 2-box: 6 left (%.3f)", v);
+        sc.objects[1].position = {0, 0, 0.5f};
+        const float moved = checkForPrint(cutMesh(sc, sc.objects[0])).volume;
+        CHECK(std::abs(moved - 6.0f) < 1e-3f && boundsMax(cutMesh(sc, sc.objects[0])).z == 1.0f, "moved up, a slot at the top instead (%.3f)", moved);
+        const Scene made = withCutsMade(sc);
+        CHECK(!made.objects[1].visible && std::abs(checkForPrint(made.objects[0].mesh).volume - 6.0f) < 1e-3f, "exporting: the cut made, the bar hidden");
+        sc.objects[1].cuts = 2;
+        CHECK(!cutTarget(sc, sc.objects[1]) && !hasCuts(sc, sc.objects[0]), "cutting itself: no cut");
+        sc.objects[1].cuts = 1;
+        const auto file = (std::filesystem::temp_directory_path() / "fry3dx_test" / "cuts.fry").string();
+        std::filesystem::create_directories(std::filesystem::path(file).parent_path());
+        auto back = saveScene(file, sc) ? loadScene(file) : std::nullopt;
+        CHECK(back && back->objects.size() == 2 && back->objects[1].cuts == back->objects[0].id && back->objects[0].cuts == 0, "cuts saved and back (to the new ids)");
+    }
+
     { // copies along a path: a square's outline, a line, a cube's biggest face
         Mesh sq;
         sq.verts = {{0, 0, 0}, {2, 0, 0}, {2, 2, 0}, {0, 2, 0}};

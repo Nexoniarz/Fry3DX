@@ -233,6 +233,7 @@ std::string sceneText(const Scene& scene) {
     for (const Object& o : scene.objects) {
         out << "object " << quoted(o.name) << "\n";
         if (folderAt.count(o.folder)) out << "  folder " << folderAt[o.folder] << "\n";
+        if (const Object* t = cutTarget(scene, o)) out << "  cuts " << (t - scene.objects.data()) + 1 << "\n"; // (its place in the file)
         out << "  position " << o.position.x << " " << o.position.y << " " << o.position.z << "\n";
         out << "  rotation " << o.rotation.w << " " << o.rotation.x << " " << o.rotation.y << " " << o.rotation.z << "\n"; // (a quaternion: w x y z)
         out << "  scale " << o.scale.x << " " << o.scale.y << " " << o.scale.z << "\n";
@@ -373,7 +374,7 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
             size_t at = 0;
             l >> at;
             o->folder = uint32_t(at); // (a place in the file for now)
-        } else if (word == "visible") l >> o->visible;
+        } else if (word == "cuts") l >> o->cuts; // (a place in the file for now) else if (word == "visible") l >> o->visible;
         else if (word == "locked") l >> o->locked;
         else if (word == "recipe") {
             l >> o->recipe;
@@ -422,7 +423,44 @@ std::optional<Scene> parseScene(std::istream& in, const std::string& path, std::
             p = std::find_if(s.folders.begin(), s.folders.end(), [&](const Folder& g) { return g.id == p; })->parent;
         }
     for (Object& o : s.objects) o.folder = idAt(o.folder);
+    for (Object& o : s.objects) o.cuts = o.cuts >= 1 && o.cuts <= s.objects.size() && &s.objects[o.cuts - 1] != &o ? s.objects[o.cuts - 1].id : 0u;
     return s;
+}
+
+const Object* cutTarget(const Scene& s, const Object& cutter) {
+    if (!cutter.cuts || cutter.cuts == cutter.id) return nullptr;
+    for (const Object& o : s.objects)
+        if (o.id == cutter.cuts) return &o;
+    return nullptr;
+}
+bool hasCuts(const Scene& s, const Object& o) {
+    for (const Object& c : s.objects)
+        if (c.cuts == o.id && c.id != o.id && !c.mesh.faces.empty()) return true;
+    return false;
+}
+Mesh cutMesh(const Scene& s, const Object& o, bool mirrorOnly) {
+    Mesh m = o.hasFinish() ? finishedMesh(o, mirrorOnly) : o.mesh;
+    const glm::mat4 into = glm::inverse(objectMatrix(o));
+    for (const Object& c : s.objects) {
+        if (c.cuts != o.id || c.id == o.id || c.mesh.faces.empty()) continue;
+        Mesh cutter = c.hasFinish() ? finishedMesh(c) : c.mesh;
+        transform(cutter, into * objectMatrix(c));
+        if (Mesh cut = m; combine(cut, cutter, Combine::Subtract)) m = std::move(cut); // (one that takes everything, or fails: left out)
+    }
+    return m;
+}
+Scene withCutsMade(const Scene& s) {
+    Scene out = s;
+    for (size_t i = 0; i < out.objects.size(); ++i) {
+        Object& o = out.objects[i];
+        if (hasCuts(s, s.objects[i])) {
+            o.mesh = cutMesh(s, s.objects[i]);
+            o.mirror = 0, o.round = 0, o.smoothLevels = 0, o.creases.clear();
+            o.uvs.clear(); // (its painting doesn't fit the new faces)
+        }
+        if (cutTarget(s, s.objects[i])) o.visible = false;
+    }
+    return out;
 }
 
 // ── glTF ──

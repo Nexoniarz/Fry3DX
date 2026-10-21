@@ -29,6 +29,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1117,7 +1118,7 @@ private:
     void restore(Snapshot& s) {
         // (Not the scripts: they're edited like text, not undone with the model.)
         std::vector<fry::SceneScript> scripts = std::move(scene_.scripts);
-        scene_ = s.scene, selected_ = s.selected, active_ = s.active, mode_ = s.mode;
+        scene_ = s.scene, selected_ = s.selected, active_ = s.active, mode_ = s.mode, followAt_.clear();
         scene_.scripts = std::move(scripts);
         selVerts_ = s.verts, selFaces_ = s.faces, selEdges_ = s.edges;
         if (mode_ == Mode::Edit && !find(active_)) mode_ = Mode::Object;
@@ -1140,7 +1141,7 @@ private:
     }
 
     void newScene() {
-        scene_ = {};
+        scene_ = {}, followAt_.clear();
         script_ = 0, scriptPath_.clear();
         path_.clear();
         undo_.clear(), redo_.clear(), selected_.clear();
@@ -1299,7 +1300,7 @@ private:
         auto s = loadPackage(path, &err);
         if (!s) return say("Couldn't open: " + err);
         dropAutosave();
-        scene_ = std::move(*s);
+        scene_ = std::move(*s), followAt_.clear();
         // (an old plain-text .fry: its pictures are PNGs beside it)
         const stdfs::path here = stdfs::path(path).parent_path();
         for (Object& o : scene_.objects) {
@@ -1362,7 +1363,7 @@ private:
         for (size_t i = 0; i < scene_.objects.size(); ++i)
             if (const Object& o = scene_.objects[i]; o.picture && o.uvsFit()) pngs[i] = pngBytes(o.layers.empty() ? *o.picture : composePicture(o));
         std::string err;
-        if (!exportModel(path, scene_, pngs, &err)) return say("Couldn't export: " + err);
+        if (!exportModel(path, fry::withCutsMade(scene_), pngs, &err)) return say("Couldn't export: " + err);
         say("Exported " + stdfs::path(path).filename().string());
     }
 
@@ -3070,7 +3071,7 @@ private:
         }
         if (p.key == key) return p;
         p.key = key;
-        p.world = o.hasFinish() ? finishedMesh(o) : o.mesh;
+        p.world = cutKeys_.count(o.id) ? fry::cutMesh(scene_, o) : o.hasFinish() ? finishedMesh(o) : o.mesh;
         transform(p.world, objectMatrix(o));
         p.lo = boundsMin(p.world), p.hi = boundsMax(p.world);
         p.check = checkForPrint(p.world, overhangDeg_, 0.0f);
@@ -3126,7 +3127,7 @@ private:
     std::vector<Object*> printTargets() { // (what's picked, or everything shown)
         std::vector<Object*> out;
         for (Object& o : scene_.objects)
-            if (o.visible && (selected_.empty() || selected_.count(o.id))) out.push_back(&o);
+            if (o.visible && !isCutter(o) && (selected_.empty() || selected_.count(o.id))) out.push_back(&o);
         return out;
     }
     void drawPrintBed(keel::Renderer& r, const keel::ModelLighting& light) {
@@ -3160,14 +3161,14 @@ private:
         if (showOverhangs_) {
             const keel::ModelLighting flat{{glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f)}, 0.0f};
             for (const Object& o : scene_.objects)
-                if (o.visible)
+                if (o.visible && !isCutter(o))
                     if (const PrintInfo& p = printInfo(o); p.hasOverhang)
                         r.drawModel(p.overhang, glm::scale(glm::mat4(1.0f), glm::vec3(kUnits)), glm::vec4(0.95f, 0.15f, 0.1f, 0.55f), nullptr, &flat, false);
         }
         if (showThin_) {
             const keel::ModelLighting flat{{glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f), glm::vec3(1.0f)}, 0.0f};
             for (const Object& o : scene_.objects)
-                if (o.visible)
+                if (o.visible && !isCutter(o))
                     if (const PrintInfo& p = printInfo(o); p.thinFaces)
                         r.drawModel(p.thin, glm::scale(glm::mat4(1.0f), glm::vec3(kUnits)), glm::vec4(1.0f, 0.8f, 0.1f, 0.7f), nullptr, &flat, false);
         }
@@ -4388,13 +4389,95 @@ private:
 
     // The mesh as seen: with its rounding, smoothing and mirror — but while its shape is being
     // edited, only the mirror (the rest would hide the points you're moving).
+    // Editable cuts show (but not while its own shape's being edited: the points you move).
     const Mesh& shownMesh(const Object& o) {
         const bool editingThis = mode_ == Mode::Edit && o.id == active_;
-        if (!o.hasFinish() || (editingThis && !o.mirror)) return o.mesh;
+        const bool cut = !editingThis && cutKeys_.count(o.id);
+        if ((!o.hasFinish() && !cut) || (editingThis && !o.mirror)) return o.mesh;
         Shown& s = shown_[o.id];
         const uint64_t v = versions_[o.id];
-        if (!(s.version == v && v && s.mirrorOnly == editingThis)) s.mesh = finishedMesh(o, editingThis), s.version = v, s.mirrorOnly = editingThis;
+        if (!(s.version == v && v && s.mirrorOnly == editingThis))
+            s.mesh = cut ? fry::cutMesh(scene_, o) : finishedMesh(o, editingThis), s.version = v, s.mirrorOnly = editingThis;
         return s.mesh;
+    }
+    // Each object something's cut out of, and what its cutters are (their shapes, where they are):
+    // a change, and it's made again (the caches follow its version).
+    std::map<uint32_t, uint64_t> cutKeys_;
+    std::map<uint32_t, glm::mat4> followAt_; // (where each cut object and cutter was last frame)
+    void followCuts() {
+        // What's cut moved, turned or sized (not by a drag: that takes them itself), and its cutter
+        // didn't: the cutter goes the same way, so the hole stays where it was on it.
+        std::map<uint32_t, glm::mat4> at;
+        for (Object& c : scene_.objects) {
+            const Object* t = fry::cutTarget(scene_, c);
+            if (!t) continue;
+            const glm::mat4 mt = objectMatrix(*t);
+            const auto was = followAt_.find(t->id), cWas = followAt_.find(c.id);
+            if (!drag_.active && was != followAt_.end() && cWas != followAt_.end() && was->second != mt && cWas->second == objectMatrix(c) && !c.locked) {
+                const glm::mat4 m = mt * glm::inverse(was->second) * objectMatrix(c);
+                glm::vec3 skew;
+                glm::vec4 persp;
+                glm::vec3 scale, pos;
+                glm::quat rot;
+                if (glm::decompose(m, scale, rot, pos, skew, persp)) c.position = pos, c.rotation = glm::normalize(rot), c.scale = scale, touched(c.id);
+            }
+            at[t->id] = mt, at[c.id] = objectMatrix(c);
+        }
+        followAt_ = std::move(at);
+        std::map<uint32_t, uint64_t> now;
+        for (const Object& c : scene_.objects) {
+            const Object* t = fry::cutTarget(scene_, c);
+            if (!t || c.mesh.faces.empty()) continue;
+            uint64_t& key = now.emplace(t->id, 1469598103934665603ull).first->second;
+            key = (key ^ versions_[c.id] ^ (uint64_t(c.id) << 40)) * 1099511628211ull;
+            const glm::mat4 m = objectMatrix(c);
+            for (int i = 0; i < 16; ++i) {
+                uint32_t b;
+                std::memcpy(&b, &m[i / 4][i % 4], 4);
+                key = (key ^ b) * 1099511628211ull;
+            }
+        }
+        for (const auto& [id, key] : now)
+            if (auto it = cutKeys_.find(id); it == cutKeys_.end() || it->second != key) versions_[id] = ++versionClock_;
+        for (const auto& [id, key] : cutKeys_)
+            if (!now.count(id)) versions_[id] = ++versionClock_;
+        cutKeys_ = std::move(now);
+    }
+    bool isCutter(const Object& o) const { return fry::cutTarget(scene_, o) != nullptr; }
+    // Editable cut: the last picked has the others cut out of it, and they stay objects to move.
+    void cutEditable() {
+        if (mode_ == Mode::Edit) leaveEdit();
+        Object* a = find(active_);
+        if (!a || selected_.size() < 2) return say("Pick the cutters, then (Shift) what they cut last: they stay, to move and change, and the hole follows");
+        pushUndo();
+        int n = 0;
+        for (Object& o : scene_.objects)
+            if (selected_.count(o.id) && o.id != a->id) o.cuts = a->id, ++n;
+        for (Object& o : scene_.objects) // (one that was cutting the cutters: not a loop of cuts)
+            if (o.id == a->id && o.cuts && selected_.count(o.cuts)) o.cuts = 0;
+        selected_.erase(a->id), active_ = *selected_.rbegin();
+        dirty_ = true;
+        say(std::format("{} cut out of {} (editable: move or change {}; Apply makes it for good)", n == 1 ? "1 object" : std::format("{} objects", n), find(a->id)->name, n == 1 ? "it" : "them"));
+    }
+    // The cut made for good: one cutter (or all of what's cut out of it) into the shape, gone.
+    void applyCuts(uint32_t target, uint32_t only = 0) {
+        Object* t = find(target);
+        if (!t) return;
+        pushUndo();
+        Scene part = scene_; // (just the cutters wanted)
+        for (Object& o : part.objects)
+            if (o.cuts == target && only && o.id != only) o.cuts = 0;
+        Object* pt = &*std::find_if(part.objects.begin(), part.objects.end(), [&](const Object& o) { return o.id == target; });
+        t->mesh = fry::cutMesh(part, *pt);
+        t->mirror = 0, t->round = 0, t->smoothLevels = 0, t->creases.clear();
+        std::set<uint32_t> gone;
+        for (const Object& o : scene_.objects)
+            if (o.cuts == target && (!only || o.id == only)) gone.insert(o.id);
+        std::erase_if(scene_.objects, [&](const Object& o) { return gone.count(o.id) > 0; });
+        for (uint32_t id : gone) selected_.erase(id);
+        selected_.insert(target), active_ = target;
+        changedShape(*find(target));
+        say(std::format("Cut made for good in {} ({} faces)", find(target)->name, find(target)->mesh.faces.size()));
     }
 
     // ───────────────────────────── picking ─────────────────────────────
@@ -5110,7 +5193,8 @@ private:
             return;
         }
         for (Object& o : scene_.objects) {
-            if (!selected_.count(o.id) || o.locked) continue;
+            const bool along = !selected_.count(o.id) && o.cuts && selected_.count(o.cuts) && isCutter(o); // (an editable cutter goes with what it cuts)
+            if ((!selected_.count(o.id) && !along) || o.locked) continue;
             o.position = glm::vec3(T * glm::vec4(o.position, 1.0f));
             if (drag_.tool == Tool::Rotate) o.rotation = glm::normalize(glm::quat_cast(glm::mat3(T)) * o.rotation);
             if (drag_.tool == Tool::Scale) {
@@ -5607,7 +5691,7 @@ private:
         keel::execute(want);
     }
     // Painted, and shown as painted (with rounding or smoothing added since, it isn't).
-    bool painted(const Object& o) const { return o.picture && o.uvsFit() && !o.hasFinish(); }
+    bool painted(const Object& o) const { return o.picture && o.uvsFit() && !o.hasFinish() && !cutKeys_.count(o.id); }
 
     keel::ModelId modelOf(const Object& o) {
         const bool editingThis = mode_ == Mode::Edit && o.id == active_;
@@ -5688,6 +5772,7 @@ private:
 
     void draw3D(keel::Renderer& r) {
         settleView();
+        followCuts();
         keel::Camera cam;
         cam.origin = eye_ * kUnits, cam.yaw = yaw_, cam.pitch = pitch_, cam.fovY = fov_, cam.shift = shift_, cam.zNear = nearFar_.x, cam.zFar = nearFar_.y;
         r.setCamera(cam);
@@ -5712,11 +5797,15 @@ private:
             if (o.picture) uploadPicture(o, !(paint_.active && paint_.object == o.id));
         if (shading() != Shading::Wire)
             for (const Object& o : scene_.objects) {
-                if (!o.visible) continue;
+                if (!o.visible || isCutter(o)) continue;
                 const glm::vec4 tint = painted(o) ? glm::vec4(1.0f) : glm::vec4(glm::pow(o.color, glm::vec3(2.2f)), 1.0f); // (colours are picked as seen: sRGB)
                 const keel::Surface surface{o.metal, o.rough};
                 r.drawModel(modelOf(o), toUnits * objectMatrix(o), tint, nullptr, &light, rendered, nullptr, keel::LiquidStyle::None, &surface);
             }
+        // Editable cutters: see-through, so the hole they make shows (not in a saved picture).
+        if (shading() != Shading::Wire && !capturing())
+            for (const Object& o : scene_.objects)
+                if (o.visible && isCutter(o)) r.drawModel(modelOf(o), toUnits * objectMatrix(o), glm::vec4(0.9f, 0.35f, 0.3f, 0.3f), nullptr, &light, false);
         // Rendered: a ground to stand on and catch the shadows (not part of what you make).
         if (rendered && look.ground) {
             if (!haveGround_) {
@@ -5858,6 +5947,10 @@ private:
             if (!o.visible) continue;
             const bool sel = selected_.count(o.id) > 0 && !clean && tab_ != Tab::Paint;
             if (ed && o.id == ed->id) continue;
+            if (isCutter(o)) {
+                if (!clean) lines(o, shownMesh(o), sel ? kAccent : IM_COL32(235, 95, 85, 150), sel ? 1.6f : 1.0f, false);
+                continue;
+            }
             if (shading() == Shading::Wire || xray_) lines(o, shownMesh(o), sel ? kAccent : IM_COL32(200, 200, 205, 150), sel ? 1.6f : 1.0f, false);
             else if (sel) outline(o, kAccent, 2.5f);
         }
@@ -6286,6 +6379,7 @@ private:
         add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
         add("paint.mirror", "Paint both sides (mirrored)", "Paint", "", [this] { paintMirror_ = !paintMirror_, say(paintMirror_ ? "Painting both sides" : "Painting one side"); }, {}, "symmetry symmetric");
         add("paint.stencil", "Draw a paint stencil (paint only inside it)", "Paint", "", [this] { setTab(Tab::Paint), drawingStencil_ = true, stencil_.clear(); }, {}, "mask masking tape area");
+        add("object.cutEditable", "Cut out, editable (the cutters stay, the hole follows them)", "Object", "", [this] { cutEditable(); }, many, "boolean subtract difference hole non-destructive live");
         add("shape.crease", "Crease the picked edges (stay sharp when smoothed)", "Shape", "Shift+E", [this] { creaseSelected(); }, editing, "sharp hard edge subdivision smooth");
         add("shape.slide", "Slide the points along their edges...", "Shape", "Alt+G", [this] { startSlide(); }, editing, "edge slide vertex slide");
         add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_, say(liveMirror_ ? "Mirror editing on: both sides change together" : "Mirror editing off"); }, {}, "symmetry symmetric x");
@@ -6455,6 +6549,8 @@ private:
             ImGui::TextDisabled("Two or more: the last picked is kept");
             if (ImGui::MenuItem("Add them together", "Ctrl+Shift++", false, many)) combineSelected(Combine::Add);
             if (ImGui::MenuItem("Take the others out of it", "Ctrl+Shift+-", false, many)) combineSelected(Combine::Subtract);
+            if (ImGui::MenuItem("Cut out, editable", nullptr, false, many)) cutEditable();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The others cut into the last picked but stay objects: move or change them and the hole follows (Apply makes it for good)");
             if (ImGui::MenuItem("Keep only where they overlap", nullptr, false, many)) combineSelected(Combine::Overlap);
             if (ImGui::MenuItem("Join (just as they are)", "Ctrl+J", false, many)) joinSelected();
             ImGui::Separator();
@@ -7567,6 +7663,25 @@ private:
         }
         if (o->hasFinish() && ImGui::Button("Make it part of the shape", ImVec2(w, 0))) applyFinish(*o);
         if (o->hasFinish() && ImGui::IsItemHovered()) ImGui::SetTooltip("Bake the rounding, smoothing and mirror into the points (so you can edit them)");
+        if (const Object* t = fry::cutTarget(scene_, *o)) { // (an editable cutter)
+            ImGui::SeparatorText("Cut");
+            ImGui::TextColored(accentText(), "Cuts into %s", t->name.c_str());
+            ImGui::TextDisabled("Move it, turn it, change its shape: the hole follows.");
+            const uint32_t target = t->id, me = o->id;
+            if (ImGui::Button("Apply: make the cut for good", ImVec2(w, 0))) return applyCuts(target, me);
+            if (ImGui::Button("Stop cutting (keep it as an object)", ImVec2(w, 0))) pushUndo(), o->cuts = 0, dirty_ = true;
+        } else if (cutKeys_.count(o->id)) {
+            int n = 0;
+            for (const Object& c : scene_.objects) n += c.cuts == o->id && isCutter(c);
+            ImGui::SeparatorText("Cut");
+            ImGui::TextDisabled("%d editable cut%s in it", n, n == 1 ? "" : "s");
+            if (ImGui::Button(n == 1 ? "Apply: make the cut for good" : "Apply: make them all for good", ImVec2(w, 0))) return applyCuts(o->id);
+            if (ImGui::Button("Pick the cutters", ImVec2(w, 0))) {
+                selected_.clear();
+                for (const Object& c : scene_.objects)
+                    if (c.cuts == o->id) selected_.insert(c.id), active_ = c.id;
+            }
+        }
         ImGui::SeparatorText("Do");
         if (ImGui::Button("Edit shape (Tab)", ImVec2(w, 0))) enterEdit();
         if (ImGui::Button("Apply turn and size", ImVec2(w, 0))) applyTransform(*o);

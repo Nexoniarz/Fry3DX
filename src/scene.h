@@ -66,6 +66,9 @@ struct Object {
     int smoothLevels = 0;
     bool smoothKeepSharp = false;
     std::set<std::pair<int, int>> creases; // edges (points, the lower first) smoothing keeps sharp
+    // An editable cut: this object is taken out of that one (its id), and stays an object you can
+    // move and change (the hole follows); shown see-through, not exported or printed itself.
+    uint32_t cuts = 0;
     bool hasFinish() const { return mirror || round > 0.0f || smoothLevels > 0; }
     // A painted picture on it: where each face corner sits on it (0..1), and the picture
     // (shared with the undo steps until it's painted on again). Saved beside the .fry as a PNG.
@@ -137,6 +140,14 @@ struct Scene {
     std::vector<Reference> references;
     uint32_t nextId = 1;
 };
+
+// Editable cuts: whether something's cut out of it, and it with them cut out (and its finishing
+// touches; only the mirror with mirrorOnly) in its own space. The scene with each cut made for
+// good and its cutters hidden, for exporting.
+const Object* cutTarget(const Scene& s, const Object& cutter); // (what it cuts, if it's there)
+bool hasCuts(const Scene& s, const Object& o);
+Mesh cutMesh(const Scene& s, const Object& o, bool mirrorOnly = false);
+Scene withCutsMade(const Scene& s);
 
 // Materials to start from: a colour (unless `keepColor`: only how metal and rough it is) and
 // how metal and rough. Shown in the view (Solid and Rendered) and exported with the object.
