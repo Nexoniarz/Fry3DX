@@ -211,14 +211,14 @@ void Renderer::drawSprite(const glm::vec3& at, float size, const glm::vec4& colo
     list.push_back({glm::vec4(at, size * 0.5f), color, glm::vec4(0, 0, 0, rotation), glm::vec4(0, 0, 0, tex)});
 }
 
-void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive) {
+void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive, float widthTo) {
     auto& list = additive ? packet_.glowSprites : packet_.sprites;
     if (list.size() >= 8192) return;
     uint32_t bits = texture;
     float tex;
     std::memcpy(&tex, &bits, 4);
-    // up.xyz: half its length along it (non-zero marks a streak; its side is found per frame).
-    list.push_back({glm::vec4((from + to) * 0.5f, width * 0.5f), color, glm::vec4(0.0f), glm::vec4((to - from) * 0.5f, tex)});
+    // up.xyz: half its length along it (non-zero marks a streak); right.w: half its width at `to`.
+    list.push_back({glm::vec4((from + to) * 0.5f, width * 0.5f), color, glm::vec4(0.0f, 0.0f, 0.0f, (widthTo < 0.0f ? width : widthTo) * 0.5f), glm::vec4((to - from) * 0.5f, tex)});
 }
 
 void Renderer::drawModel(ModelId model, const glm::mat4& transform, const glm::vec4& tint, const std::vector<glm::mat4>* skin,
@@ -757,11 +757,9 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
                         up = glm::cross(right, f);
         for (auto* list : {&p.sprites, &p.glowSprites})
             for (gpu::Sprite& s : *list) {
-                if (const glm::vec3 half(s.up); glm::dot(half, half) > 0.0f) { // a streak: its side faces the eye
-                    glm::vec3 side = glm::cross(half, camera_.origin - glm::vec3(s.posSize));
-                    side = glm::length(side) > 1e-6f ? glm::normalize(side) : right;
-                    s.right = glm::vec4(side * s.posSize.w, 0.0f);
-                    s.posSize.w = 1.0f;
+                if (const glm::vec3 half(s.up); glm::dot(half, half) > 0.0f) { // a streak: each end's side faces the eye (sprite.vert)
+                    s.right = glm::vec4(camera_.origin, s.right.w);
+                    s.posSize.w = -std::max(s.posSize.w, 1e-9f); // (below 0: a streak; its half width at `from`)
                     continue;
                 }
                 s.right = glm::vec4(right, s.right.w), s.up = glm::vec4(up, s.up.w);

@@ -354,7 +354,12 @@ private:
     glm::vec3 target_{0, 0, 0.4f};
     float yaw_ = -135.0f, pitch_ = 25.0f, dist_ = 4.0f, fov_ = 50.0f;
     glm::vec2 nearFar_{2.0f, 16384.0f};
-    std::map<uint32_t, std::pair<uint64_t, float>> radii_; // (each object's mesh: how far it reaches from its place)
+    struct Reach {
+        uint64_t version = 0;
+        float radius = 0.0f;  // (how far its mesh reaches from its place)
+        glm::vec3 lo{0.0f}, hi{0.0f}; // (the box round its mesh, its mirrored copies too)
+    };
+    std::map<uint32_t, Reach> radii_; // (each object's)
     ImVec2 viewMin_{0, 0}, viewMax_{1, 1};
     glm::mat4 vp_{1.0f};
     glm::vec3 eye_{0.0f};
@@ -1471,6 +1476,7 @@ private:
     void lookBy(ImVec2 d);
     void refocus();
     float nearestThing();
+    auto reachOf(const Object& o) -> const Reach&;
     float viewScale() const { return std::max(std::min(dist_, nearest_), 0.001f); } // (how big the view is where it matters: what's ahead, or nearer)
     void benchStep();
     void benchEnd(std::chrono::steady_clock::time_point began);

@@ -191,18 +191,38 @@ auto App::refocus() -> void {
     if (t > 0.0f) dist_ = std::clamp(t, 0.01f, 5000.0f), target_ = eye + f * dist_;
 }
 
+// How far an object's mesh reaches (worked out again when its shape changes).
+auto App::reachOf(const Object& o) -> const Reach& {
+    Reach& r = radii_[o.id];
+    if (r.version == shapeKey(o) && r.version) return r;
+    r = {shapeKey(o)};
+    if (!o.mesh.verts.empty()) r.lo = boundsMin(o.mesh), r.hi = boundsMax(o.mesh);
+    for (int a = 0; a < 3; ++a)
+        if (o.mirror & (1 << a)) r.lo[a] = std::min(r.lo[a], -r.hi[a]), r.hi[a] = std::max(r.hi[a], -r.lo[a]);
+    for (const glm::vec3& v : o.mesh.verts) r.radius = std::max(r.radius, glm::length(v));
+    return r;
+}
+
 // How far the nearest thing (an object, the ground) is from the eye: the near plane and the
-// shade in corners go by it, so looking past something close doesn't break them.
+// shade in corners go by it, so looking past something close doesn't break them. To each
+// object's box (not a ball round it: inside a long flat one's ball, it would come to nothing).
 auto App::nearestThing() -> float {
     float best = std::abs(eye_.z); // (the ground)
     for (const Object& o : scene_.objects) {
         if (!o.visible) continue;
-        auto& [version, radius] = radii_[o.id];
-        if (version != shapeKey(o) || !version) {
-            version = shapeKey(o), radius = 0;
-            for (const glm::vec3& v : o.mesh.verts) radius = std::max(radius, glm::length(v));
-        }
-        best = std::min(best, std::max(glm::distance(eye_, o.position) - radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}), 0.0f));
+        const Reach& r = reachOf(o);
+        const glm::mat4 m = objectMatrix(o);
+        const glm::vec3 local = glm::inverse(m) * glm::vec4(eye_, 1.0f);
+        best = std::min(best, glm::distance(eye_, glm::vec3(m * glm::vec4(glm::clamp(local, r.lo, r.hi), 1.0f))));
+    }
+    for (const Reference& ref : scene_.references) {
+        if (!ref.visible || (ref.ownViewOnly && !lookingAt(ref.axis))) continue;
+        const Picture& pic = picture(ref);
+        if (!pic.ok) continue;
+        const auto c = referenceCorners(ref, pic.aspect);
+        const glm::vec3 u = c[1] - c[0], v = c[3] - c[0], d = eye_ - c[0];
+        const float s = std::clamp(glm::dot(d, u) / std::max(glm::dot(u, u), 1e-12f), 0.0f, 1.0f), t = std::clamp(glm::dot(d, v) / std::max(glm::dot(v, v), 1e-12f), 0.0f, 1.0f);
+        best = std::min(best, glm::distance(eye_, c[0] + u * s + v * t));
     }
     return std::max(best, 0.001f);
 }
@@ -264,7 +284,7 @@ auto App::updateCamera(ImGuiIO& io) -> void {
         else {
             float size = 0.0f; // (the biggest object's size: the least step is a little of it)
             for (const Object& o : scene_.objects)
-                if (auto r = radii_.find(o.id); r != radii_.end()) size = std::max(size, r->second.second * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
+                size = std::max(size, reachOf(o).radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
             const float step = std::clamp(std::max(dist_ * 0.2f, size * 0.05f), 0.001f, 500.0f) * fry_movespeed.f();
             target_ += viewDir() * step * io.MouseWheel;
             refocus();
@@ -308,16 +328,12 @@ auto App::settleView() -> void {
 auto App::nearFar() -> glm::vec2 {
     float reach = 1.0f; // (how far from the middle the furthest object reaches, m)
     for (const Object& o : scene_.objects) {
-        auto& [version, radius] = radii_[o.id];
-        if (version != shapeKey(o) || !version) {
-            version = shapeKey(o), radius = 0;
-            for (const glm::vec3& v : o.mesh.verts) radius = std::max(radius, glm::length(v));
-        }
-        reach = std::max(reach, glm::length(o.position) + radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
+        reach = std::max(reach, glm::length(o.position) + reachOf(o).radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
     }
     // (the near plane as far out as it can be: the depth's precision is spread between them, so
-    // the nearer it is, the more surfaces far off flicker through each other)
-    const float nearM = std::clamp(viewScale() * 0.005f, 1e-5f, 50.0f);
+    // the nearer it is, the more surfaces flicker through each other. Nothing is nearer than the
+    // nearest thing, and a quarter of the way to it keeps even the screen's corners clear of it)
+    const float nearM = std::clamp(std::max(viewScale() * 0.005f, nearest_ * 0.25f), 1e-5f, 50.0f);
     const float farM = std::max({dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, 100.0f});
     return glm::vec2(nearM, farM) * kUnits;
 }
@@ -1388,7 +1404,7 @@ auto App::draw3D(keel::Renderer& r) -> void {
         const glm::vec3 u = n.z > 0.5f ? glm::vec3(1, 0, 0) : n.x > 0.5f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
         const glm::vec3 v = glm::cross(n, u);
         const float first = gridStep() * 0.1f;
-        const int count = 20, pieces = 12, levels = 4;
+        const int count = 20, levels = 4;
         const glm::vec3 centre = target_ - n * glm::dot(target_, n);
         const float cu = glm::dot(centre, u), cv = glm::dot(centre, v);
         const float shade = rendered ? 0.0f : 1.0f; // (dark lines on the sunny ground, light ones in the grey room)
@@ -1400,31 +1416,37 @@ auto App::draw3D(keel::Renderer& r) -> void {
             const glm::vec3 along = dir ? u : v, across = dir ? v : u;
             const float mid = dir ? cu : cv, side = std::abs(at - (dir ? cv : cu));
             // (short pieces near the eye, longer further off: each one's width and fading is
-            // worked out at its middle, so it has to be about the same all along it)
+            // worked out at its middle, so it has to be about the same all along it. Each piece
+            // reaches a quarter further from the eye than the last: from the eye's nearest
+            // point on the line, steps growing with how far the eye is from the line)
             const float near = std::clamp(glm::dot(eye_, along), from, to);
-            for (int k = 0; k < pieces * 2; ++k) {
-                const int sideOf = k < pieces ? -1 : 1, j = k % pieces;
+            const glm::vec3 off = eye_ - across * at;
+            const float gap = std::max(glm::length(off - along * glm::dot(off, along)), 1e-4f); // (from the eye to the line)
+            for (int sideOf : {-1, 1}) {
                 const float len = sideOf < 0 ? near - from : to - near;
                 if (len <= 0.0f) continue;
-                const float f0 = float(j) / float(pieces), f1 = float(j + 1) / float(pieces);
-                const float t0 = near + float(sideOf) * len * f0 * f0 * f0, t1 = near + float(sideOf) * len * f1 * f1 * f1;
-                const glm::vec3 a = across * at + along * t0, b = across * at + along * t1, c = (a + b) * 0.5f;
-                // (pixels to the next line like it, across this one as it lies on the screen)
-                const glm::vec4 c0 = vp_ * glm::vec4(c, 1.0f), c1 = vp_ * glm::vec4(c + across * s, 1.0f), c2 = vp_ * glm::vec4(c + along * s, 1.0f);
-                if (c0.w <= 1e-6f || c1.w <= 1e-6f || c2.w <= 1e-6f) continue; // (behind the eye)
-                const glm::vec2 half = glm::vec2(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y) * 0.5f;
-                const glm::vec2 s0 = glm::vec2(c0) / c0.w * half, s1 = glm::vec2(c1) / c1.w * half, s2 = glm::vec2(c2) / c2.w * half;
-                const glm::vec2 way = s2 - s0;
-                const float wayLen = glm::length(way), d = s1.x - s0.x, e = s1.y - s0.y;
-                const float apart = wayLen > 1e-6f ? std::abs(d * way.y - e * way.x) / wayLen : glm::length(s1 - s0);
-                const float px = pixelSize(c);
-                float alpha = axis ? std::max(glm::smoothstep(1.5f, 6.0f, apart), 0.35f) : glm::smoothstep(5.0f, 20.0f, apart);
-                if (ring > 0.0f) alpha *= glm::smoothstep(ring, ring * 0.6f, std::max(side, std::abs((t0 + t1) * 0.5f - mid)));
-                const float strong = axis ? 1.0f : glm::smoothstep(20.0f, 160.0f, apart);
-                glm::vec4 pc = axis ? col : glm::vec4(glm::vec3(shade), glm::mix(dim, bright, strong));
-                pc.a *= alpha;
-                if (pc.a < 0.004f) continue;
-                r.drawStreak(lift(a) * kUnits, lift(b) * kUnits, px * (1.0f + 0.6f * strong) * kUnits, pc, keel::kWhiteTexture);
+                const int pieces = std::clamp(int(std::ceil(std::log1p(len / gap) / std::log(1.25f))), 2, 64);
+                for (int j = 0; j < pieces; ++j) {
+                    const float t0 = near + float(sideOf) * gap * std::expm1(std::log1p(len / gap) * float(j) / float(pieces));
+                    const float t1 = near + float(sideOf) * gap * std::expm1(std::log1p(len / gap) * float(j + 1) / float(pieces));
+                    const glm::vec3 a = across * at + along * t0, b = across * at + along * t1, c = (a + b) * 0.5f;
+                    // (pixels to the next line like it, across this one as it lies on the screen)
+                    const glm::vec4 c0 = vp_ * glm::vec4(c, 1.0f), c1 = vp_ * glm::vec4(c + across * s, 1.0f), c2 = vp_ * glm::vec4(c + along * s, 1.0f);
+                    if (c0.w <= 1e-6f || c1.w <= 1e-6f || c2.w <= 1e-6f) continue; // (behind the eye)
+                    const glm::vec2 half = glm::vec2(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y) * 0.5f;
+                    const glm::vec2 s0 = glm::vec2(c0) / c0.w * half, s1 = glm::vec2(c1) / c1.w * half, s2 = glm::vec2(c2) / c2.w * half;
+                    const glm::vec2 way = s2 - s0;
+                    const float wayLen = glm::length(way), d = s1.x - s0.x, e = s1.y - s0.y;
+                    const float apart = wayLen > 1e-6f ? std::abs(d * way.y - e * way.x) / wayLen : glm::length(s1 - s0);
+                    float alpha = axis ? std::max(glm::smoothstep(1.5f, 6.0f, apart), 0.35f) : glm::smoothstep(5.0f, 20.0f, apart);
+                    if (ring > 0.0f) alpha *= glm::smoothstep(ring, ring * 0.6f, std::max(side, std::abs((t0 + t1) * 0.5f - mid)));
+                    const float strong = axis ? 1.0f : glm::smoothstep(20.0f, 160.0f, apart);
+                    glm::vec4 pc = axis ? col : glm::vec4(glm::vec3(shade), glm::mix(dim, bright, strong));
+                    pc.a *= alpha;
+                    if (pc.a < 0.004f) continue;
+                    const float thick = (1.0f + 0.6f * strong) * kUnits; // (a pixel or so at each end: the pieces meet exactly)
+                    r.drawStreak(lift(a) * kUnits, lift(b) * kUnits, pixelSize(a) * thick, pc, keel::kWhiteTexture, false, pixelSize(b) * thick);
+                }
             }
         };
         for (int level = 0; level < levels; ++level) {

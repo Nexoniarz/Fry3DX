@@ -15,6 +15,10 @@ void main() {
     float c = cos(pc.right.w), s = sin(pc.right.w);
     vec2 r = vec2(c * q.x - s * q.y, s * q.x + c * q.y);
     vec3 world = pc.posSize.xyz + (pc.right.xyz * r.x + pc.up.xyz * r.y) * pc.posSize.w;
+    if (pc.posSize.w < 0.0) { // a streak: right.xyz the eye, w its half width at the far end; each end's side faces the eye
+        vec3 end = pc.posSize.xyz + pc.up.xyz * q.y, side = cross(pc.up.xyz, pc.right.xyz - end);
+        world = end + (length(side) > 1e-9 ? normalize(side) : vec3(0.0, 0.0, 1.0)) * q.x * (q.y < 0.0 ? -pc.posSize.w : pc.right.w);
+    }
     v_uv = q * 0.5 + 0.5;
     v_uv.y = 1.0 - v_uv.y;
     gl_Position = pc.viewProj * vec4(world, 1.0);

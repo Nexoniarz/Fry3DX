@@ -5,6 +5,9 @@ layout(location = 0) out vec3 v_normal;
 layout(location = 1) out vec2 v_uv;
 layout(location = 2) out vec2 v_lightmapUv;
 layout(location = 3) out vec3 v_world;
+// The same depth in the depth pre-pass and the scene pass (else the compiler, dropping what the pre-pass
+// doesn't use, can round it differently and the scene pass fails its depth test in patches).
+invariant gl_Position;
 
 void main() {
     Vertex vx = VERTEX(VERTEX_ID);

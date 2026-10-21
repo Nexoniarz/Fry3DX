@@ -98,9 +98,9 @@ public:
     // A particle: a camera-facing square `size` across, unlit (color can be HDR-bright).
     // additive: light added on (fire, sparks, flashes); else blended (smoke, dust).
     void drawSprite(const glm::vec3& at, float size, const glm::vec4& color, TextureId texture, float rotation = 0.0f, bool additive = true);
-    // A sprite stretched from `from` to `to`, `width` across, turned to face the eye as much as
-    // it can (rain).
-    void drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive = false);
+    // A sprite stretched from `from` to `to`, `width` across (`widthTo` at `to`: < 0, the same),
+    // each end turned to face the eye as much as it can (rain; lines drawn in pieces meet exactly).
+    void drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive = false, float widthTo = -1.0f);
     // skin: one matrix per joint (anim::skinMatrices) for skinned models; ignored otherwise.
     // lighting: probe light for moving things (nullptr = lightmap or simple sun shading).
     void drawModel(ModelId model, const glm::mat4& transform, const glm::vec4& tint = glm::vec4(1.0f),
