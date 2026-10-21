@@ -694,7 +694,7 @@ public:
         else if (showRecover_) showRecover_ = false;
         else if (editLayer()) cancelFloating();
         else if (!knifePts_.empty()) knifePts_.clear();
-        else if (!drawPts_.empty()) drawPts_.clear();
+        else if (!drawPts_.empty()) drawPts_.clear(), sketchTyped_.clear();
         else if (drag_.active) cancelDrag();
         else if (slide_.active) cancelSlide();
         else if (printTool_ == PrintTool::Measure) printTool_ = PrintTool::None, measure_.clear();
@@ -5087,9 +5087,33 @@ private:
             *hit = glm::vec3(snapTo(hit->x, step), snapTo(hit->y, step), snapTo(hit->z, step));
             *hit -= n * glm::dot(*hit - p, n);
         }
+        // Exact sizes: Shift holds the line to 15 degree steps; a typed number is its length (m).
+        if (!drawPts_.empty() && (io.KeyShift || !sketchTyped_.empty())) {
+            const glm::vec3 last = drawPts_.back(), u = glm::normalize(std::abs(n.z) < 0.9f ? glm::cross(glm::vec3(0, 0, 1), n) : glm::cross(glm::vec3(1, 0, 0), n)), v = glm::cross(n, u);
+            glm::vec3 d = *hit - last;
+            float len = glm::length(d);
+            float a = std::atan2(glm::dot(d, v), glm::dot(d, u));
+            if (io.KeyShift) a = std::round(a / glm::radians(15.0f)) * glm::radians(15.0f);
+            if (!sketchTyped_.empty() && sketchTyped_ != "." && sketchTyped_ != "-") len = std::abs(std::strtof(sketchTyped_.c_str(), nullptr));
+            *hit = last + (u * std::cos(a) + v * std::sin(a)) * len;
+        }
         return hit;
     }
+    std::string sketchTyped_; // (drawing a shape: the next line's length, typed)
+    // Drawing a shape: numbers typed go to the next line's length, Enter puts the point there.
+    bool sketchKeys(const ImGuiIO& io) {
+        bool used = false;
+        for (ImWchar c : io.InputQueueCharacters)
+            if ((c >= '0' && c <= '9') || (c == '.' && sketchTyped_.find('.') == std::string::npos)) sketchTyped_ += char(c), used = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !sketchTyped_.empty()) sketchTyped_.pop_back(), used = true;
+        if (!sketchTyped_.empty() && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) {
+            if (auto p = drawPoint(io)) drawPts_.push_back(*p);
+            sketchTyped_.clear(), used = true;
+        }
+        return used;
+    }
     void finishShape() {
+        sketchTyped_.clear();
         if (drawPts_.size() < 3) {
             drawPts_.clear();
             return say("A shape needs 3 points or more");
@@ -5330,6 +5354,7 @@ private:
 
     void shortcuts(ImGuiIO& io) {
         if (io.WantTextInput || slide_.active || drag_.active) return; // (a slide, a drag: their own keys)
+        if (tool_ == Tool::Draw && !drawPts_.empty() && sketchKeys(io)) return;
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
         auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
         if (key(ImGuiKey_F3) || (ctrl && key(ImGuiKey_Space))) return openSearch();
@@ -5889,6 +5914,12 @@ private:
                 if (auto p = drawPoint(io); p && project(*p, s)) {
                     if (!drawPts_.empty()) dl->AddLine(prev, s, IM_COL32(255, 160, 90, 180), 1.5f);
                     dl->AddCircle(s, 5.0f, IM_COL32(255, 255, 255, 220), 0, 1.5f);
+                    if (!drawPts_.empty()) { // (the line's length by the mouse, and what's typed)
+                        const std::string label = std::format("{:.4g} m{}", glm::distance(drawPts_.back(), *p), sketchTyped_.empty() ? "   (type a length, Enter; Shift: 15 deg steps)" : "   typed " + sketchTyped_);
+                        const ImVec2 at(io.MousePos.x + 16, io.MousePos.y + 14), size = ImGui::CalcTextSize(label.c_str());
+                        dl->AddRectFilled(ImVec2(at.x - 5, at.y - 3), ImVec2(at.x + size.x + 5, at.y + size.y + 3), IM_COL32(24, 24, 28, 225), 4.0f);
+                        dl->AddText(at, sketchTyped_.empty() ? IM_COL32(235, 235, 240, 255) : kAccent, label.c_str());
+                    }
                 }
         }
         gizmo(dl, io);
