@@ -685,6 +685,7 @@ public:
         else if (!drawPts_.empty()) drawPts_.clear();
         else if (drag_.active) cancelDrag();
         else if (slide_.active) cancelSlide();
+        else if (printTool_ == PrintTool::Measure) printTool_ = PrintTool::None, measure_.clear();
         else if (mode_ == Mode::Edit) leaveEdit();
         else selected_.clear();
     }
@@ -790,6 +791,7 @@ private:
 
     // ── Tools ──
     bool snap_ = false;
+    int snapKind_ = 0; // (moving: 0 steps, 1 points, 2 edges' middles, 3 faces' middles)
     float snapMove_ = 0.05f, snapAngle_ = 15.0f, snapScale_ = 0.1f;
     float drawThickness_ = 0.05f, extrudeAmount_ = 0.1f, insetAmount_ = 0.2f, mergeDistance_ = 0.001f;
     float bevelWidth_ = 0.05f;
@@ -4793,6 +4795,45 @@ private:
             o.mesh.verts[size_t(it->second)] = glm::vec3(-n.x, n.y, n.z);
         }
     }
+    // What moving snaps to near the mouse (points, edges' or faces' middles), in the world: not
+    // what's being moved. Marked with a ring.
+    std::optional<glm::vec3> snapTarget(ImVec2 mouse, float within = 22.0f) {
+        std::optional<glm::vec3> best;
+        float bestD = within;
+        const std::set<int> moving = mode_ == Mode::Edit ? selectedPoints() : std::set<int>{};
+        for (const Object& o : scene_.objects) {
+            if (!o.visible) continue;
+            const bool edited = mode_ == Mode::Edit && o.id == active_;
+            if (mode_ != Mode::Edit && selected_.count(o.id)) continue;
+            const Mesh& mesh = edited ? o.mesh : shownMesh(o);
+            const glm::mat4 m = objectMatrix(o);
+            auto tryPoint = [&](const glm::vec3& local) {
+                const glm::vec3 w = glm::vec3(m * glm::vec4(local, 1.0f));
+                ImVec2 sp;
+                if (!project(w, sp)) return;
+                if (const float d = std::hypot(sp.x - mouse.x, sp.y - mouse.y); d < bestD) bestD = d, best = w;
+            };
+            if (snapKind_ == 1) {
+                for (size_t v = 0; v < mesh.verts.size(); ++v)
+                    if (!(edited && moving.count(int(v)))) tryPoint(mesh.verts[v]);
+            } else if (snapKind_ == 2) {
+                for (const auto& e : adjacencyOf(o, mesh).edges)
+                    if (!(edited && (moving.count(e[0]) || moving.count(e[1])))) tryPoint((mesh.verts[size_t(e[0])] + mesh.verts[size_t(e[1])]) * 0.5f);
+            } else if (snapKind_ == 3) {
+                for (const auto& f : mesh.faces) {
+                    glm::vec3 c(0.0f);
+                    bool mine = false;
+                    for (int v : f) c += mesh.verts[size_t(v)], mine |= edited && moving.count(v) > 0;
+                    if (!mine && !f.empty()) tryPoint(c / float(f.size()));
+                }
+            }
+        }
+        if (best) {
+            ImVec2 sp;
+            if (project(*best, sp)) ImGui::GetForegroundDrawList()->AddCircle(sp, 7.0f, kAccent, 0, 2.0f);
+        }
+        return best;
+    }
     // The number typed while dragging, if any (just "-" or "." is none yet).
     std::optional<float> typed() const {
         if (drag_.typed.empty() || drag_.typed == "-" || drag_.typed == "." || drag_.typed == "-.") return std::nullopt;
@@ -4848,12 +4889,16 @@ private:
             glm::vec3 delta(0.0f);
             if (drag_.handle < 3) {
                 float t = closestOnAxis(ray, p, axes[size_t(drag_.handle)]) - drag_.startT;
-                if (snapping) t = snapTo(t, snapMove_);
+                if (snapping && !snapKind_) t = snapTo(t, snapMove_);
+                if (snapping && snapKind_)
+                    if (auto at = snapTarget(io.MousePos)) t = glm::dot(*at - p, axes[size_t(drag_.handle)]); // (as far along the arrow as it is)
                 if (auto v = typed()) t = *v;
                 delta = axes[size_t(drag_.handle)] * t;
             } else if (auto hit = hitPlane(ray, p, -viewDir())) {
                 delta = *hit - drag_.startHit;
-                if (snapping) delta = glm::vec3(snapTo(delta.x, snapMove_), snapTo(delta.y, snapMove_), snapTo(delta.z, snapMove_));
+                if (snapping && !snapKind_) delta = glm::vec3(snapTo(delta.x, snapMove_), snapTo(delta.y, snapMove_), snapTo(delta.z, snapMove_));
+                if (snapping && snapKind_)
+                    if (auto at = snapTarget(io.MousePos)) delta = *at - p; // (the arrows' point onto it)
             }
             T = glm::translate(glm::mat4(1.0f), delta);
             message_ = std::format("Move {:.3f}, {:.3f}, {:.3f} m", delta.x, delta.y, delta.z), messageAt_ = now();
@@ -5011,7 +5056,7 @@ private:
         if (slide_.active) return slideFrame(io);
         if (tab_ == Tab::Paint) return paintViewport(io);
         if (tab_ == Tab::Layout) return layoutViewport(io);
-        if (tab_ == Tab::Print && printTool_ != PrintTool::None) return printViewport(io);
+        if ((tab_ == Tab::Print && printTool_ != PrintTool::None) || printTool_ == PrintTool::Measure) return printViewport(io); // (measuring: the Model tab too)
         if (knifeDown_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             knifeDown_ = false;
             const ImVec2 end = knifeEnd(io);
@@ -5648,7 +5693,7 @@ private:
             dl->PopClipRect();
             return;
         }
-        if (tab_ == Tab::Print && !clean) printOverlay(dl, io);
+        if ((tab_ == Tab::Print || printTool_ == PrintTool::Measure) && !clean) printOverlay(dl, io);
         if (clean) {
             dl->PopClipRect();
             return;
@@ -5995,6 +6040,12 @@ private:
         add("object.thicken", "Make it thick (or hollow)...", "Object", "", [this] { showThicken_ = true; }, picked, "shell solidify wall");
         add("object.cleanflat", "Join flat faces side by side", "Object", "", [this] { cleanFlatFaces(); }, picked, "dissolve tidy");
         add("object.spin", "Spin (turn its outline round an axis)...", "Object", "", [this] { showSpin_ = true; }, [this] { return !selected_.empty(); }, "lathe screw revolve");
+        add("tools.measure", "Measure between two points", "Tools", "", [this] {
+            if (tab_ != Tab::Model && tab_ != Tab::Print) setTab(Tab::Model);
+            if (mode_ == Mode::Edit) leaveEdit();
+            printTool_ = PrintTool::Measure, measure_.clear();
+            say("Measure: click two points (corners catch the mouse); Esc: done");
+        }, {}, "ruler distance length dimension how far");
         add("object.repair", "Repair for printing (close holes, fix faces)", "Print", "", [this] { repairSelected(); }, picked, "fix manifold watertight holes");
         add("object.scale", "Print size: scale, fit the plate, fix units...", "Print", "", [this] { setTab(Tab::Print), showPrintSize_ = true; }, picked, "resize fit dimensions percent scaler");
         for (const ToolInfo& t : kTools)
@@ -6600,7 +6651,7 @@ private:
             layoutOptions(w);
             return ImGui::End();
         }
-        if (tab_ == Tab::Print && printTool_ != PrintTool::None) {
+        if ((tab_ == Tab::Print && printTool_ != PrintTool::None) || printTool_ == PrintTool::Measure) {
             printOptions(w);
             return ImGui::End();
         }
@@ -6620,8 +6671,15 @@ private:
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("In steps (holding Ctrl does the opposite)");
             if (!snap_) return;
             ImGui::SetNextItemWidth(w);
-            if (angle) ImGui::DragFloat("##snapangle", &snapAngle_, 0.5f, 1.0f, 90.0f, "every %.0f deg");
-            else ImGui::DragFloat("##snapmove", &snapMove_, 0.001f, 0.001f, 10.0f, "every %.3f m");
+            if (angle) return void(ImGui::DragFloat("##snapangle", &snapAngle_, 0.5f, 1.0f, 90.0f, "every %.0f deg"));
+            if (tool_ == Tool::Move) {
+                ImGui::SetNextItemWidth(w);
+                ImGui::Combo("##snapkind", &snapKind_, "To steps\0To points\0To edges' middles\0To faces' middles\0");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Points, middles: the arrows' point goes to the one nearest the mouse (on other shapes, or what isn't picked)");
+                if (snapKind_) return;
+                ImGui::SetNextItemWidth(w);
+            }
+            ImGui::DragFloat("##snapmove", &snapMove_, 0.001f, 0.001f, 10.0f, "every %.3f m");
         };
         switch (tool_) {
         case Tool::Select: {
@@ -7175,7 +7233,22 @@ private:
         if (undoable([&] { return ImGui::DragFloat3("Turn (deg)", &euler.x, 0.5f, 0, 0, "%.1f"); })) o->rotation = fromEuler(euler);
         if (undoable([&] { return ImGui::DragFloat3("Size", &o->scale.x, 0.005f, 0, 0, "%.3f"); })) touched(o->id);
         const glm::vec3 lo = boundsMin(shownMesh(*o)) * glm::abs(o->scale), hi = boundsMax(shownMesh(*o)) * glm::abs(o->scale);
-        ImGui::TextDisabled("%.3f x %.3f x %.3f m", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+        // Its size itself, typed (the scale worked out from it): 0.25 makes it 25 cm, whatever it was.
+        glm::vec3 dims = hi - lo;
+        const glm::vec3 was = dims;
+        if (undoable([&] { return ImGui::DragFloat3("Dimensions (m)", &dims.x, 0.002f, 0.0001f, 1e5f, "%.4g"); })) {
+            int k = -1;
+            for (int i = 0; i < 3; ++i)
+                if (std::abs(dims[i] - was[i]) > 1e-9f) k = i;
+            if (k >= 0 && was[k] > 1e-7f && dims[k] > 1e-7f) {
+                const float f = dims[k] / was[k];
+                if (keepProportions_) o->scale *= f;
+                else o->scale[k] *= f;
+                touched(o->id);
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Across, deep, high: type a size and it's made that big");
+        ImGui::Checkbox("Keep its proportions", &keepProportions_);
         ImGui::SeparatorText("Look");
         materialPicker(*o);
         undoable([&] { return ImGui::ColorEdit3("Colour", &o->color.x); });
@@ -7390,8 +7463,8 @@ private:
             for (const LayToolInfo& t : kLayTools)
                 if (t.tool == layTool_)
                     ImGui::TextDisabled("%s:  %s   ·   Tab: frames or corners   Right drag: orbit (pan in the Picture panel)   F1: all keys", t.name, t.hint);
-        } else if (tab_ == Tab::Print && printTool_ != PrintTool::None) {
-            ImGui::TextDisabled(printTool_ == PrintTool::Measure ? "Measure:  click two points on the model (corners catch the mouse); a third click starts again   ·   M: done"
+        } else if ((tab_ == Tab::Print && printTool_ != PrintTool::None) || printTool_ == PrintTool::Measure) {
+            ImGui::TextDisabled(printTool_ == PrintTool::Measure ? "Measure:  click two points on the model (corners catch the mouse); a third click starts again   ·   M (Print) or Esc: done"
                                                                  : "Lay flat:  click the face it should stand on: it turns so that face is down, on the bed   ·   L: done");
         } else if (tab_ == Tab::Paint && sculpting_) {
             for (const SculptToolInfo& t : kSculptTools)
@@ -7919,7 +7992,7 @@ private:
     }
 
     // ── (being made) ──
-    bool showPrintSize_ = false, liveMirror_ = false;
+    bool showPrintSize_ = false, liveMirror_ = false, keepProportions_ = false;
     // Each picked object (or all, in the Print tab with none picked) made ready to print.
     void repairSelected() {
         std::vector<Object*> targets;
