@@ -101,6 +101,11 @@ public:
     // A sprite stretched from `from` to `to`, `width` across (`widthTo` at `to`: < 0, the same),
     // each end turned to face the eye as much as it can (rain; lines drawn in pieces meet exactly).
     void drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive = false, float widthTo = -1.0f);
+    // A grid of lines on the plane through `centre` along u and v (unit), drawn for each pixel:
+    // four sets `first` × 10 apart, each showing by how far apart its lines are on the screen,
+    // the axes coloured; look: the lines' shade (0 dark, 1 light), how faint, how strong; fading
+    // out `reach` from the centre.
+    void drawGrid(const glm::vec3& centre, const glm::vec3& u, const glm::vec3& v, float first, const glm::vec3& look, float reach);
     // skin: one matrix per joint (anim::skinMatrices) for skinned models; ignored otherwise.
     // lighting: probe light for moving things (nullptr = lightmap or simple sun shading).
     void drawModel(ModelId model, const glm::mat4& transform, const glm::vec4& tint = glm::vec4(1.0f),

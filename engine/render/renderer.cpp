@@ -211,6 +211,12 @@ void Renderer::drawSprite(const glm::vec3& at, float size, const glm::vec4& colo
     list.push_back({glm::vec4(at, size * 0.5f), color, glm::vec4(0, 0, 0, rotation), glm::vec4(0, 0, 0, tex)});
 }
 
+void Renderer::drawGrid(const glm::vec3& centre, const glm::vec3& u, const glm::vec3& v, float first, const glm::vec3& look, float reach) {
+    if (packet_.sprites.size() >= 8192) return;
+    // (colour.a < 0 marks it; sprite.vert / sprite.frag)
+    packet_.sprites.push_back({glm::vec4(centre, reach), glm::vec4(look, -1.0f), glm::vec4(u, first), glm::vec4(v, 0.0f)});
+}
+
 void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive, float widthTo) {
     auto& list = additive ? packet_.glowSprites : packet_.sprites;
     if (list.size() >= 8192) return;
@@ -757,6 +763,7 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
                         up = glm::cross(right, f);
         for (auto* list : {&p.sprites, &p.glowSprites})
             for (gpu::Sprite& s : *list) {
+                if (s.color.a < 0.0f) continue; // (a grid: on its own plane)
                 if (const glm::vec3 half(s.up); glm::dot(half, half) > 0.0f) { // a streak: each end's side faces the eye (sprite.vert)
                     s.right = glm::vec4(camera_.origin, s.right.w);
                     s.posSize.w = -std::max(s.posSize.w, 1e-9f); // (below 0: a streak; its half width at `from`)
@@ -765,6 +772,7 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
                 s.right = glm::vec4(right, s.right.w), s.up = glm::vec4(up, s.up.w);
             }
         std::sort(p.sprites.begin(), p.sprites.end(), [&](const gpu::Sprite& a, const gpu::Sprite& b) {
+            if ((a.color.a < 0.0f) != (b.color.a < 0.0f)) return a.color.a < 0.0f; // (grids first: they're under everything)
             return glm::dot(glm::vec3(a.posSize) - camera_.origin, f) > glm::dot(glm::vec3(b.posSize) - camera_.origin, f);
         });
     }

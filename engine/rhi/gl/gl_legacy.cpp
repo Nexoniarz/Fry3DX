@@ -366,28 +366,67 @@ void main() { o_color = vec4(u_color.rgb * (0.5 + 0.5 * max(dot(v_normal, normal
 const char* kSpriteVert = R"(
 uniform mat4 u_viewProj;
 uniform vec4 u_posSize, u_right, u_up; // right.w: turn (radians)
+uniform vec4 u_color;
 out vec2 v_uv;
+out vec3 v_world;
 const vec2 kQuad[6] = vec2[](vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,-1), vec2(1,1), vec2(-1,1));
 void main() {
     vec2 q = kQuad[gl_VertexID];
     float c = cos(u_right.w), s = sin(u_right.w);
     vec2 r = vec2(c * q.x - s * q.y, s * q.x + c * q.y);
     vec3 world = u_posSize.xyz + (u_right.xyz * r.x + u_up.xyz * r.y) * u_posSize.w;
-    if (u_posSize.w < 0.0) { // a streak: right.xyz the eye, w its half width at the far end; each end's side faces the eye
+    if (u_color.a < 0.0) world = u_posSize.xyz + (u_right.xyz * q.x + u_up.xyz * q.y) * u_posSize.w; // a grid: a square on its plane
+    else if (u_posSize.w < 0.0) { // a streak: right.xyz the eye, w its half width at the far end; each end's side faces the eye
         vec3 end = u_posSize.xyz + u_up.xyz * q.y, side = cross(u_up.xyz, u_right.xyz - end);
         world = end + (length(side) > 1e-9 ? normalize(side) : vec3(0.0, 0.0, 1.0)) * q.x * (q.y < 0.0 ? -u_posSize.w : u_right.w);
     }
     v_uv = vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    v_world = world;
     gl_Position = u_viewProj * vec4(world, 1.0);
     gl_Position.z = gl_Position.z * 2.0 - gl_Position.w;
 }
 )";
 const char* kSpriteFrag = R"(
 in vec2 v_uv;
+in vec3 v_world;
 uniform sampler2D u_albedo;
-uniform vec4 u_color;
+uniform vec4 u_color, u_posSize, u_right, u_up;
 out vec4 o_color;
+// A grid (a sprite with colour.a < 0), worked out for each pixel where it lies on its plane:
+// four sets of lines each `first` × 10 apart, each set showing by how far apart its lines are on
+// the screen (none where they crowd together, stronger where they're far apart), lines about a
+// pixel wide, smooth; the axes through the middle in the colour of the world's axis they run along.
+// look: x the lines' shade (0 dark, 1 light), y how faint, z how strong; reach: it fades out there.
+vec3 gridAxisColor(vec3 d) {
+    d = abs(d);
+    return d.x > 0.5 ? vec3(0.9, 0.25, 0.25) : d.y > 0.5 ? vec3(0.3, 0.75, 0.25) : vec3(0.25, 0.45, 0.95);
+}
+vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float first, vec3 look, float reach) {
+    vec2 c = vec2(dot(w, u), dot(w, v));
+    vec2 fw = max(fwidth(c), vec2(1e-9));
+    float lines = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        float s = first * pow(10.0, float(k));
+        vec2 apart = s / fw; // (pixels between this set's lines, each way)
+        vec2 off = abs(fract(c / s + 0.5) - 0.5) * apart; // (pixels to the nearest of them)
+        vec2 strong = smoothstep(20.0, 160.0, apart);
+        vec2 cover = clamp(0.5 * (1.0 + 0.6 * strong) + 0.5 - off, 0.0, 1.0);
+        vec2 a = cover * smoothstep(5.0, 20.0, apart) * mix(vec2(look.y), vec2(look.z), strong);
+        lines = max(lines, max(a.x, a.y));
+    }
+    vec2 axis = clamp(1.25 - abs(c) / fw, 0.0, 1.0) * 0.9; // (x: the line along v, y: along u)
+    float fade = smoothstep(reach, reach * 0.6, length(w - centre));
+    vec3 col = vec3(look.x) * lines;
+    float a = lines;
+    col = mix(col, gridAxisColor(v), axis.x), a = mix(a, 1.0, axis.x);
+    col = mix(col, gridAxisColor(u), axis.y), a = mix(a, 1.0, axis.y);
+    return vec4(col / max(a, 1e-6), a * fade);
+}
 void main() {
+    if (u_color.a < 0.0) {
+        o_color = gridColor(v_world, u_posSize.xyz, normalize(u_right.xyz), normalize(u_up.xyz), u_right.w, u_color.rgb, u_posSize.w);
+        return;
+    }
     vec4 t = texture(u_albedo, v_uv);
     o_color = vec4(t.rgb * u_color.rgb, clamp((t.a - 0.03) / 0.97, 0.0, 1.0) * u_color.a);
 }
