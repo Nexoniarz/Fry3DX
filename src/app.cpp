@@ -1038,9 +1038,12 @@ private:
     std::map<uint32_t, uint64_t> versions_;
     uint64_t versionClock_ = 1;
     struct Shown {
-        uint64_t version = 0;
+        uint64_t version = 0; // (the shape key it was made for)
         bool mirrorOnly = false;
         Mesh mesh;
+        std::future<Mesh> coming; // (a big one being made on another thread)
+        uint64_t comingVersion = 0;
+        bool comingMirror = false;
     };
     std::map<uint32_t, Shown> shown_;
     struct Picture {
@@ -1116,6 +1119,42 @@ private:
     }
     Object* editing() { return mode_ == Mode::Edit ? find(active_) : nullptr; }
     void touched(uint32_t id) { versions_[id] = ++versionClock_, dirty_ = true, ++edits_; }
+    // What decides the shape an object shows, as a number: its points and faces, its finishing
+    // touches, creases, cuts, shading and painting's layout (not where it is). Worked out again
+    // only when it's been touched: moving a smoothed object doesn't smooth it again each frame.
+    struct ShapeKey {
+        uint64_t version = 0, key = 0;
+    };
+    std::map<uint32_t, ShapeKey> shapeKeys_;
+    uint64_t shapeKey(const Object& o) {
+        ShapeKey& k = shapeKeys_[o.id];
+        const uint64_t v = versions_[o.id];
+        if (k.version == v && v) return k.key;
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&](const void* p, size_t n) {
+            const auto* b = static_cast<const uint8_t*>(p);
+            size_t i = 0;
+            for (; i + 8 <= n; i += 8) { // (8 bytes at a time: a big mesh in a few ms)
+                uint64_t w;
+                std::memcpy(&w, b + i, 8);
+                h = (h ^ w) * 1099511628211ull;
+            }
+            for (; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+        };
+        mix(o.mesh.verts.data(), o.mesh.verts.size() * sizeof(glm::vec3));
+        for (const auto& f : o.mesh.faces) {
+            const uint64_t n = f.size();
+            mix(&n, 8), mix(f.data(), f.size() * sizeof(int));
+        }
+        for (const auto& [a, b] : o.creases) mix(&a, 4), mix(&b, 4);
+        for (const auto& f : o.uvs) mix(f.data(), f.size() * sizeof(glm::vec2));
+        const uint64_t cut = cutKeys_.count(o.id) ? cutKeys_[o.id] : 0;
+        const void* pic = o.picture.get();
+        mix(&cut, 8), mix(&pic, sizeof pic);
+        mix(&o.mirror, 4), mix(&o.round, 4), mix(&o.roundAngle, 4), mix(&o.roundSteps, 4), mix(&o.smoothLevels, 4), mix(&o.smoothKeepSharp, 1), mix(&o.smooth, 1), mix(&o.smoothAngle, 4);
+        k = {v, h ? h : 1};
+        return k.key;
+    }
     void touchAll() {
         for (const Object& o : scene_.objects) versions_[o.id] = ++versionClock_;
     }
@@ -4382,8 +4421,8 @@ private:
         float reach = 1.0f; // (how far from the middle the furthest object reaches, m)
         for (const Object& o : scene_.objects) {
             auto& [version, radius] = radii_[o.id];
-            if (version != versions_[o.id] || !version) {
-                version = versions_[o.id], radius = 0;
+            if (version != shapeKey(o) || !version) {
+                version = shapeKey(o), radius = 0;
                 for (const glm::vec3& v : o.mesh.verts) radius = std::max(radius, glm::length(v));
             }
             reach = std::max(reach, glm::length(o.position) + radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
@@ -4422,15 +4461,46 @@ private:
     // The mesh as seen: with its rounding, smoothing and mirror — but while its shape is being
     // edited, only the mirror (the rest would hide the points you're moving).
     // Editable cuts show (but not while its own shape's being edited: the points you move).
+    // A big one (smoothed into many faces, cut) is made on another thread: what was shown stays
+    // till it's ready, so the window doesn't stop.
     const Mesh& shownMesh(const Object& o) {
         const bool editingThis = mode_ == Mode::Edit && o.id == active_;
         const bool cut = !editingThis && cutKeys_.count(o.id);
         if ((!o.hasFinish() && !cut) || (editingThis && !o.mirror)) return o.mesh;
         Shown& s = shown_[o.id];
-        const uint64_t v = versions_[o.id];
-        if (!(s.version == v && v && s.mirrorOnly == editingThis))
+        const uint64_t v = shapeKey(o);
+        if (s.coming.valid() && s.coming.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            Mesh got = s.coming.get();
+            if (s.comingVersion == v && s.comingMirror == editingThis) s.mesh = std::move(got), s.version = v, s.mirrorOnly = editingThis;
+        }
+        if (s.version == v && v && s.mirrorOnly == editingThis) return s.mesh;
+        // (what it'll come to: its faces four times over for each level of smoothing)
+        const size_t faces = o.mesh.faces.size() * (size_t(1) << (2 * std::clamp(editingThis ? 0 : o.smoothLevels, 0, 6))) * (o.mirror ? 2 : 1);
+        const bool big = faces > 40000 || (cut && o.mesh.faces.size() > 20000);
+        if (!big || s.mesh.verts.empty()) { // (small: now; the first time: now too, there's nothing to show yet)
             s.mesh = cut ? fry::cutMesh(scene_, o) : finishedMesh(o, editingThis), s.version = v, s.mirrorOnly = editingThis;
+            return s.mesh;
+        }
+        if (!s.coming.valid() || s.comingVersion != v || s.comingMirror != editingThis) {
+            if (s.coming.valid()) s.coming.wait(); // (one at a time for each object: the old one's thrown away)
+            Scene part; // (just it and what cuts it: the thread has its own copies)
+            part.objects.push_back(o);
+            if (cut)
+                for (const Object& c : scene_.objects)
+                    if (c.cuts == o.id && c.id != o.id) part.objects.push_back(c);
+            s.comingVersion = v, s.comingMirror = editingThis;
+            s.coming = std::async(std::launch::async, [part = std::move(part), cut, editingThis] {
+                return cut ? fry::cutMesh(part, part.objects[0]) : finishedMesh(part.objects[0], editingThis);
+            });
+            message_ = "Working it out...", messageAt_ = now();
+        }
         return s.mesh;
+    }
+    // The key of the mesh actually shown (the one before, while a new one's being made).
+    uint64_t meshKey(const Object& o, const Mesh& mesh) {
+        if (&mesh == &o.mesh) return shapeKey(o);
+        auto it = shown_.find(o.id);
+        return it != shown_.end() && &it->second.mesh == &mesh ? it->second.version * 2 + it->second.mirrorOnly : shapeKey(o);
     }
     // Each object something's cut out of, and what its cutters are (their shapes, where they are):
     // a change, and it's made again (the caches follow its version).
@@ -4541,7 +4611,7 @@ private:
     const fry::TriangleTree& treeOf(const Object& o, const Mesh& mesh) {
         Tree& t = trees_[{o.id, &mesh != &o.mesh}];
         const glm::mat4 m = objectMatrix(o);
-        const uint64_t version = versions_[o.id];
+        const uint64_t version = meshKey(o, mesh);
         if (t.version != version || !version || t.matrix != m || t.faces != mesh.faces.size() || t.tree.points().size() != mesh.verts.size())
             t.version = version, t.matrix = m, t.faces = mesh.faces.size(), t.tree = fry::TriangleTree(mesh, m);
         return t.tree;
@@ -4591,7 +4661,7 @@ private:
     std::map<std::pair<uint32_t, bool>, Adjacency> adjacency_;
     const Adjacency& adjacencyOf(const Object& o, const Mesh& mesh) {
         Adjacency& a = adjacency_[{o.id, &mesh != &o.mesh}];
-        const uint64_t version = versions_[o.id];
+        const uint64_t version = meshKey(o, mesh);
         if (a.version == version && version && a.verts == mesh.verts.size() && a.faces == mesh.faces.size()) return a;
         a.version = version, a.verts = mesh.verts.size(), a.faces = mesh.faces.size();
         a.edges.clear(), a.plane.resize(mesh.faces.size());
@@ -5727,10 +5797,10 @@ private:
 
     keel::ModelId modelOf(const Object& o) {
         const bool editingThis = mode_ == Mode::Edit && o.id == active_;
-        const uint64_t want = (versions_[o.id] * 2 + editingThis) * 2 + painted(o);
-        auto it = models_.find(o.id);
-        if (it != models_.end() && it->second.second == want && versions_[o.id]) return it->second.first;
         const Mesh& mesh = shownMesh(o);
+        const uint64_t want = (meshKey(o, mesh) * 2 + editingThis) * 2 + painted(o);
+        auto it = models_.find(o.id);
+        if (it != models_.end() && it->second.second == want) return it->second.first;
         keel::KmdlModel km;
         keel::KmdlMaterial mat{};
         mat.baseColor[0] = mat.baseColor[1] = mat.baseColor[2] = mat.baseColor[3] = 1.0f;
