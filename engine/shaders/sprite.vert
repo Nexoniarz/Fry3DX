@@ -9,7 +9,7 @@ PUSH_BLOCK {
     vec4 up;      // camera up, w = texture index (bits)
 } pc;
 layout(location = 0) out vec2 v_uv;
-layout(location = 1) out vec3 v_world;
+layout(location = 1) out vec2 v_rel; // (a grid: where on it, from its middle)
 const vec2 kQuad[6] = vec2[](vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,-1), vec2(1,1), vec2(-1,1));
 void main() {
     vec2 q = kQuad[VERTEX_ID];
@@ -23,6 +23,6 @@ void main() {
     }
     v_uv = q * 0.5 + 0.5;
     v_uv.y = 1.0 - v_uv.y;
-    v_world = world;
+    v_rel = pc.color.a < 0.0 ? q * pc.posSize.w : vec2(0.0);
     gl_Position = pc.viewProj * vec4(world, 1.0);
 }

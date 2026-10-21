@@ -11,6 +11,7 @@ Signed with ~/.local/share/Nexoniarz/Fry3DX-signing/release.keystore (made the f
 or the key in $FRY_KEYSTORE / $FRY_KEYSTORE_PASS. Keep it safe and keep using it: Android only
 updates an app signed with the key it was installed with.
 """
+import json
 import os
 import secrets
 import shutil
@@ -30,11 +31,8 @@ def run(*cmd, **kw):
 
 
 def app_version():
-    with open(os.path.join(ROOT, "CMakeLists.txt")) as f:
-        for line in f:
-            if line.startswith("project(Fry3DX VERSION "):
-                return line.split()[2]
-    return "0"
+    with open(os.path.join(ROOT, "project.json")) as f:  # (the version and the rest live there)
+        return json.load(f)["version"]
 
 
 def main():

@@ -1412,9 +1412,8 @@ auto App::draw3D(keel::Renderer& r) -> void {
         const glm::vec3 u = n.z > 0.5f ? glm::vec3(1, 0, 0) : n.x > 0.5f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
         const glm::vec3 v = glm::cross(n, u);
         const float reach = nearFar_.y / kUnits * 0.9f;
-        const glm::vec3 under = eye_ - n * glm::dot(eye_, n); // (the grid's plane goes through the origin)
-        const glm::vec3 look = rendered ? glm::vec3(0.0f, 0.14f, 0.4f) : glm::vec3(1.0f, 0.05f, 0.16f); // (dark lines on the sunny ground, light ones in the grey room)
-        r.drawGrid(under * kUnits, u, v, kUnits, look, reach * kUnits);
+        const glm::dvec3 eye(eye_), dn(n), under = (eye - dn * glm::dot(eye, dn)) * double(kUnits); // (the grid's plane goes through the origin)
+        r.drawGrid(under, u, v, kUnits, rendered, reach * kUnits); // (dark lines on the sunny ground, light ones in the grey room)
     }
     if (tab_ == Tab::Print) drawPrintBed(r, light);
 }

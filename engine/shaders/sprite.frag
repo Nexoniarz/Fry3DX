@@ -9,33 +9,36 @@ PUSH_BLOCK {
     vec4 up;
 } pc;
 layout(location = 0) in vec2 v_uv;
-layout(location = 1) in vec3 v_world;
-// A grid (a sprite with colour.a < 0), worked out for each pixel where it lies on its plane:
-// lines every 10^n metres (`metre`: units in one), the four sets from the finest that isn't
-// crowded together here, each showing by how far apart its lines are on the screen (none where
-// they crowd, stronger where they're far apart: nothing jumps as the view moves), about a pixel
-// wide, smooth; the axes through the middle in the colour of the world's axis they run along.
-// look: x the lines' shade (0 dark, 1 light), y how faint, z how strong; reach: it fades out there.
+layout(location = 1) in vec2 v_rel;
+// A grid (a sprite with colour.a < 0: -1 dark lines, -2 light ones), worked out for each pixel
+// where it lies on its plane: lines every 10^n metres (`metre`: units in one), the four sets from
+// the finest that isn't crowded together here, each showing by how far apart its lines are on the
+// screen (none where they crowd, stronger where they're far apart: nothing jumps as the view
+// moves), about a pixel wide, smooth; the axes through the middle in the colour of the world's
+// axis they run along. All from `rel`, where it is from the square's middle (a whole number of
+// kilometres from the world's: far out, the world's own numbers are too coarse for lines a
+// pixel wide); `eye`: the point under the eye, from the middle; it fades out `reach` from there.
 vec3 gridAxisColor(vec3 d) {
     d = abs(d);
     return d.x > 0.5 ? vec3(0.9, 0.25, 0.25) : d.y > 0.5 ? vec3(0.3, 0.75, 0.25) : vec3(0.25, 0.45, 0.95);
 }
-vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float metre, vec3 look, float reach) {
-    vec2 c = vec2(dot(w, u), dot(w, v));
-    vec2 fw = max(fwidth(c), vec2(1e-9));
+vec4 gridColor(vec2 rel, vec3 centre, vec3 u, vec3 v, float metre, float kind, vec2 eye, float reach) {
+    vec2 base = vec2(dot(centre, u), dot(centre, v)); // (the middle: whole kilometres)
+    vec2 fw = max(fwidth(rel), vec2(1e-9));
     float finest = floor(log(min(fw.x, fw.y) * 5.0 / metre) / log(10.0)); // (10^this m: 5 pixels apart or more)
+    vec3 look = kind < -1.5 ? vec3(1.0, 0.05, 0.16) : vec3(0.0, 0.14, 0.4); // (shade, how faint, how strong)
     float lines = 0.0;
     for (int k = 0; k < 4; ++k) {
         float s = metre * pow(10.0, finest + float(k));
         vec2 apart = s / fw; // (pixels between this set's lines, each way)
-        vec2 off = abs(fract(c / s + 0.5) - 0.5) * apart; // (pixels to the nearest of them)
+        vec2 off = abs(fract(fract(base / s) + rel / s + 0.5) - 0.5) * apart; // (pixels to the nearest of them)
         vec2 strong = smoothstep(20.0, 160.0, apart);
         vec2 cover = clamp(0.5 * (1.0 + 0.6 * strong) + 0.5 - off, 0.0, 1.0);
         vec2 a = cover * smoothstep(5.0, 20.0, apart) * mix(vec2(look.y), vec2(look.z), strong);
         lines = max(lines, max(a.x, a.y));
     }
-    vec2 axis = clamp(1.25 - abs(c) / fw, 0.0, 1.0) * 0.9; // (x: the line along v, y: along u)
-    float fade = smoothstep(reach, reach * 0.6, length(w - centre));
+    vec2 axis = clamp(1.25 - abs(base + rel) / fw, 0.0, 1.0) * 0.9; // (x: the line along v, y: along u)
+    float fade = smoothstep(reach, reach * 0.6, length(rel - eye));
     vec3 col = vec3(look.x) * lines;
     float a = lines;
     col = mix(col, gridAxisColor(v), axis.x), a = mix(a, 1.0, axis.x);
@@ -45,8 +48,8 @@ vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float metre, vec3 look, floa
 
 layout(location = 0) out vec4 o_color;
 void main() {
-    if (pc.color.a < 0.0) { // a grid: right.w the units in a metre, color.rgb its look, posSize.w how far it reaches
-        o_color = gridColor(v_world, pc.posSize.xyz, normalize(pc.right.xyz), normalize(pc.up.xyz), pc.right.w, pc.color.rgb, pc.posSize.w);
+    if (pc.color.a < 0.0) { // a grid: right.w the units in a metre, up.w how far it reaches, color.xy where the eye is over it
+        o_color = gridColor(v_rel, pc.posSize.xyz, normalize(pc.right.xyz), normalize(pc.up.xyz), pc.right.w, pc.color.a, pc.color.xy, pc.up.w);
         return;
     }
     vec4 t = sampleTex(floatBitsToUint(pc.up.w), v_uv);

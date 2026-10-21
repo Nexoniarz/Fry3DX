@@ -12,6 +12,7 @@
 Each unpacks to one Fry3DX/ folder: the program, its content (engine/, Fry3DX/; on a Mac inside
 the app), LICENSE and a README.txt. (The Android APK: android/build_apk.py.)
 """
+import json
 import os
 import shutil
 import subprocess
@@ -36,11 +37,8 @@ Open source under the Apache License 2.0 (LICENSE). Sky pictures: Poly Haven, CC
 
 
 def version():
-    with open(os.path.join(ROOT, "CMakeLists.txt")) as f:
-        for line in f:
-            if line.startswith("project(Fry3DX VERSION "):
-                return line.split()[2]
-    return "0"
+    with open(os.path.join(ROOT, "project.json")) as f:  # (the version and the rest live there)
+        return json.load(f)["version"]
 
 
 PC_NEEDS = "a graphics card with Vulkan (or OpenGL 4.6)"

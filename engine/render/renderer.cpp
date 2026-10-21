@@ -211,10 +211,18 @@ void Renderer::drawSprite(const glm::vec3& at, float size, const glm::vec4& colo
     list.push_back({glm::vec4(at, size * 0.5f), color, glm::vec4(0, 0, 0, rotation), glm::vec4(0, 0, 0, tex)});
 }
 
-void Renderer::drawGrid(const glm::vec3& centre, const glm::vec3& u, const glm::vec3& v, float metre, const glm::vec3& look, float reach) {
+void Renderer::drawGrid(const glm::dvec3& under, const glm::vec3& u, const glm::vec3& v, float metre, bool dark, float reach) {
     if (packet_.sprites.size() >= 8192) return;
+    // Its middle a whole number of kilometres along u and v (so the lines are worked out from
+    // small numbers, sprite.frag): a square round it out to `reach` past the eye.
+    const double km = 1000.0 * double(metre);
+    const glm::dvec3 du(u), dv(v);
+    const double cu = std::round(glm::dot(under, du) / km) * km, cv = std::round(glm::dot(under, dv) / km) * km;
+    const glm::dvec3 centre = du * cu + dv * cv;
+    const glm::vec2 eye(float(glm::dot(under, du) - cu), float(glm::dot(under, dv) - cv));
+    const float half = reach + glm::length(eye);
     // (colour.a < 0 marks it; sprite.vert / sprite.frag)
-    packet_.sprites.push_back({glm::vec4(centre, reach), glm::vec4(look, -1.0f), glm::vec4(u, metre), glm::vec4(v, 0.0f)});
+    packet_.sprites.push_back({glm::vec4(glm::vec3(centre), half), glm::vec4(eye, 0.0f, dark ? -1.0f : -2.0f), glm::vec4(u, metre), glm::vec4(v, reach)});
 }
 
 void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive, float widthTo) {
@@ -453,11 +461,13 @@ void Renderer::buildPacket(uint32_t width, uint32_t height) {
             for (const glm::vec3& q : corners) radius = std::max(radius, glm::length(q - center));
             radius = std::ceil(radius / 16.0f) * 16.0f;
             const float texel = 2.0f * radius / cascadeSize;
-            glm::mat4 lightView = glm::lookAt(glm::vec3(0), -sunDir_, up);
-            glm::vec4 lc = lightView * glm::vec4(center, 1);
+            // (in doubles: far from the origin a float's steps are near a texel's, and it'd shimmer)
+            const glm::dmat4 lightView0 = glm::lookAt(glm::dvec3(0), -glm::dvec3(sunDir_), glm::dvec3(up));
+            glm::dvec4 lc = lightView0 * glm::dvec4(glm::dvec3(center), 1);
             lc.x = std::floor(lc.x / texel) * texel;
             lc.y = std::floor(lc.y / texel) * texel;
-            center = glm::vec3(glm::inverse(lightView) * lc);
+            center = glm::vec3(glm::inverse(lightView0) * lc);
+            glm::mat4 lightView;
             lightView = glm::lookAt(center + sunDir_ * 8000.0f, center, up);
             frame.cascades[c] = glm::ortho(-radius, radius, -radius, radius, 1.0f, 16000.0f) * lightView;
             frame.splits[c] = f;
