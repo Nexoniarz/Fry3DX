@@ -258,6 +258,10 @@ auto App::init() -> void {
         if (a.size() > 4) l->width = std::stof(a[3]), l->height = std::stof(a[4]);
         settleSticker(o->mesh, *l);
     }, "Fry3DX: fry_sticker x y [w h]: move the sticker being moved to that point of the view");
+    static keel::Cmd bench("fry_bench", [](const keel::Args& a) {
+        if (a.size() < 3) return self->say("fry_bench orbit|smooth|angle|round frames");
+        self->bench_ = {a[1], std::max(1, std::stoi(a[2])), {}};
+    }, "Fry3DX: fry_bench orbit|smooth|angle|round frames: time that many frames while the camera turns or the picked object's setting is dragged");
     static keel::Cmd capture("fry_capture", [](const keel::Args& a) { if (a.size() > 1) self->savePicture(a[1]); }, "Fry3DX: save a picture of the view");
     static keel::Cmd layout("fry_layout", [](const keel::Args& a) {
         Object* o = self->find(self->active_);
@@ -454,7 +458,33 @@ auto App::onEscape() -> void {
     else selected_.clear();
 }
 
+// (fry_bench) Each frame: the change being timed.
+auto App::benchStep() -> void {
+    if (bench_.left <= 0) return;
+    const int i = int(bench_.ms.size());
+    Object* o = find(active_);
+    if (bench_.what == "orbit") yaw_ += 2.0f;
+    else if (o && bench_.what == "smooth") o->smoothLevels = 1 + i / 4 % 3, o->smooth = true, touched(o->id);
+    else if (o && bench_.what == "angle") o->smooth = true, o->smoothAngle = 20.0f + float(i % 40), touched(o->id);
+    else if (o && bench_.what == "round") o->round = 0.01f + 0.001f * float(i % 30), touched(o->id);
+}
+
+auto App::benchEnd(std::chrono::steady_clock::time_point began) -> void {
+    if (bench_.left <= 0) return;
+    bench_.ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count());
+    if (--bench_.left) return;
+    double sum = 0, most = 0;
+    for (double m : bench_.ms) sum += m, most = std::max(most, m);
+    say(std::format("fry_bench {}: {} frames, {:.2f} ms each, the slowest {:.2f} ms", bench_.what, bench_.ms.size(), sum / double(bench_.ms.size()), most));
+}
+
 auto App::render(keel::Renderer& r) -> void {
+    struct Timed { // (for fry_bench: the whole frame, however it ends)
+        App* app;
+        std::chrono::steady_clock::time_point began = std::chrono::steady_clock::now();
+        ~Timed() { app->benchEnd(began); }
+    } timed{this};
+    benchStep();
     r_ = &r;
     captureStep();
     setupUi();
@@ -565,7 +595,8 @@ auto App::shapeKey(const Object& o) -> uint64_t {
     const uint64_t cut = cutKeys_.count(o.id) ? cutKeys_[o.id] : 0;
     const void* pic = o.picture.get();
     mix(&cut, 8), mix(&pic, sizeof pic);
-    mix(&o.mirror, 4), mix(&o.round, 4), mix(&o.roundAngle, 4), mix(&o.roundSteps, 4), mix(&o.smoothLevels, 4), mix(&o.smoothKeepSharp, 1), mix(&o.smooth, 1), mix(&o.smoothAngle, 4);
+    mix(&o.mirror, 4), mix(&o.round, 4), mix(&o.roundAngle, 4), mix(&o.roundSteps, 4), mix(&o.smoothLevels, 4), mix(&o.smoothKeepSharp, 1);
+    // (not smooth shading and its angle: they change only how it's lit, see modelOf)
     k = {v, h ? h : 1};
     return k.key;
 }

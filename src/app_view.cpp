@@ -226,7 +226,9 @@ auto App::nearFar() -> glm::vec2 {
         }
         reach = std::max(reach, glm::length(o.position) + radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
     }
-    const float nearM = std::clamp(dist_ * 0.002f, 1e-5f, 50.0f);
+    // (the near plane as far out as it can be: the depth's precision is spread between them, so
+    // the nearer it is, the more surfaces far off flicker through each other)
+    const float nearM = std::clamp(dist_ * 0.005f, 1e-5f, 50.0f);
     const float farM = std::max({dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, 100.0f});
     return glm::vec2(nearM, farM) * kUnits;
 }
@@ -268,19 +270,21 @@ auto App::shownMesh(const Object& o) -> const Mesh& {
     Shown& s = shown_[o.id];
     const uint64_t v = shapeKey(o);
     if (s.coming.valid() && s.coming.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        Mesh got = s.coming.get();
-        if (s.comingVersion == v && s.comingMirror == editingThis) s.mesh = std::move(got), s.version = v, s.mirrorOnly = editingThis;
+        auto [got, tree] = s.coming.get();
+        if (s.comingVersion == v && s.comingMirror == editingThis) s.mesh = std::move(got), s.tree = std::move(tree), s.version = v, s.mirrorOnly = editingThis;
     }
     if (s.version == v && v && s.mirrorOnly == editingThis) return s.mesh;
-    // (what it'll come to: its faces four times over for each level of smoothing)
-    const size_t faces = o.mesh.faces.size() * (size_t(1) << (2 * std::clamp(editingThis ? 0 : o.smoothLevels, 0, 6))) * (o.mirror ? 2 : 1);
-    const bool big = faces > 40000 || (cut && o.mesh.faces.size() > 20000);
+    // (what it'll come to: its faces four times over for each level of smoothing, more for each
+    // step of rounding; past a few thousand it's made on another thread, so dragging a setting
+    // in Properties doesn't hold up every frame)
+    const size_t rounded = !editingThis && o.round > 0.0f ? size_t(std::max(o.roundSteps, 1)) + 1 : 1;
+    const size_t faces = o.mesh.faces.size() * rounded * (size_t(1) << (2 * std::clamp(editingThis ? 0 : o.smoothLevels, 0, 6))) * (o.mirror ? 2 : 1);
+    const bool big = faces > (editingThis ? 40000u : 6000u) || (cut && o.mesh.faces.size() > 2000); // (the mirror while editing: with each drag, so only when huge)
     if (!big || s.mesh.verts.empty()) { // (small: now; the first time: now too, there's nothing to show yet)
-        s.mesh = cut ? fry::cutMesh(scene_, o) : finishedMesh(o, editingThis), s.version = v, s.mirrorOnly = editingThis;
+        s.mesh = cut ? fry::cutMesh(scene_, o) : finishedMesh(o, editingThis), s.tree.reset(), s.version = v, s.mirrorOnly = editingThis;
         return s.mesh;
     }
-    if (!s.coming.valid() || s.comingVersion != v || s.comingMirror != editingThis) {
-        if (s.coming.valid()) s.coming.wait(); // (one at a time for each object: the old one's thrown away)
+    if (!s.coming.valid()) { // (one at a time for each object: while one's being made, the newest wanted waits for it to land)
         Scene part; // (just it and what cuts it: the thread has its own copies)
         part.objects.push_back(o);
         if (cut)
@@ -288,7 +292,9 @@ auto App::shownMesh(const Object& o) -> const Mesh& {
                 if (c.cuts == o.id && c.id != o.id) part.objects.push_back(c);
         s.comingVersion = v, s.comingMirror = editingThis;
         s.coming = std::async(std::launch::async, [part = std::move(part), cut, editingThis] {
-            return cut ? fry::cutMesh(part, part.objects[0]) : finishedMesh(part.objects[0], editingThis);
+            Mesh m = cut ? fry::cutMesh(part, part.objects[0]) : finishedMesh(part.objects[0], editingThis);
+            auto tree = std::make_shared<const fry::TriangleTree>(m, glm::mat4(1.0f)); // (its picking tree too, while it's here)
+            return std::pair{std::move(m), std::move(tree)};
         });
         message_ = "Working it out...", messageAt_ = now();
     }
@@ -388,19 +394,24 @@ auto App::pickObject(const Ray& ray, uint32_t only, bool base) -> Hit {
     for (const Object& o : scene_.objects) {
         if (!o.visible || (only && o.id != only)) continue;
         const Mesh& mesh = base || (mode_ == Mode::Edit && o.id == active_) ? o.mesh : shownMesh(o);
-        if (auto h = treeOf(o, mesh).nearest(ray.origin, ray.dir, best.t)) best = {o.id, h->face, h->t};
+        // (the ray into the object's own space, where its tree is: t is the same there)
+        const glm::mat4 m = objectMatrix(o);
+        if (std::abs(glm::determinant(m)) < 1e-12f) continue; // (squashed flat to nothing)
+        const glm::mat4 inv = glm::inverse(m);
+        const glm::vec3 from(inv * glm::vec4(ray.origin, 1.0f)), dir(inv * glm::vec4(ray.dir, 0.0f));
+        if (auto h = treeOf(o, mesh).nearest(from, dir, best.t)) best = {o.id, h->face, h->t};
     }
     return best;
 }
 
 // (an object's own mesh, or the one shown)
 auto App::treeOf(const Object& o, const Mesh& mesh) -> const fry::TriangleTree& {
+    if (auto s = shown_.find(o.id); s != shown_.end() && &s->second.mesh == &mesh && s->second.tree) return *s->second.tree; // (made with it)
     Tree& t = trees_[{o.id, &mesh != &o.mesh}];
-    const glm::mat4 m = objectMatrix(o);
     const uint64_t version = meshKey(o, mesh);
-    if (t.version != version || !version || t.matrix != m || t.faces != mesh.faces.size() || t.tree.points().size() != mesh.verts.size())
-        t.version = version, t.matrix = m, t.faces = mesh.faces.size(), t.tree = fry::TriangleTree(mesh, m);
-    return t.tree;
+    if (!t.tree || t.version != version || !version || t.faces != mesh.faces.size() || t.tree->points().size() != mesh.verts.size())
+        t.version = version, t.faces = mesh.faces.size(), t.tree = std::make_shared<const fry::TriangleTree>(mesh, glm::mat4(1.0f));
+    return *t.tree;
 }
 
 // Can the eye see this point of the object (nothing of it in the way)?
@@ -416,17 +427,20 @@ auto App::visible(const Object& o, const glm::vec3& world) -> bool {
 auto App::seen(const Object& o, const Mesh& mesh, int i) -> bool {
     Visibility& v = visibility_[{o.id, &mesh != &o.mesh}];
     const uint64_t version = versions_[o.id];
-    if (v.version != version || glm::distance(v.eye, eye_) >= 1e-6f || v.vp != vp_ || v.point.size() != mesh.verts.size())
-        v.version = version, v.eye = eye_, v.vp = vp_, v.point.assign(mesh.verts.size(), 0);
+    const glm::mat4 m = objectMatrix(o);
+    if (v.version != version || glm::distance(v.eye, eye_) >= 1e-6f || v.vp != vp_ || v.matrix != m || v.point.size() != mesh.verts.size()) {
+        v.version = version, v.eye = eye_, v.vp = vp_, v.matrix = m, v.point.assign(mesh.verts.size(), 0);
+        v.eyeIn = std::abs(glm::determinant(m)) < 1e-12f ? eye_ : glm::vec3(glm::inverse(m) * glm::vec4(eye_, 1.0f));
+    }
     char& got = v.point[size_t(i)];
     if (got) return got == 1;
     const fry::TriangleTree& tree = treeOf(o, mesh);
-    const glm::vec3 w = tree.points()[size_t(i)];
+    const glm::vec3 p = tree.points()[size_t(i)], w(m * glm::vec4(p, 1.0f));
     const glm::vec4 c = vp_ * glm::vec4(w, 1.0f);
-    const glm::vec3 d = w - eye_;
-    const float len = glm::length(d);
+    const float len = glm::length(w - eye_);
     if (c.w < 1e-5f || std::abs(c.x) > c.w || std::abs(c.y) > c.w || len < 1e-6f) return (got = 1); // (off the screen: not drawn anyway)
-    got = tree.blocked(eye_, d / len, len - std::max(len * 0.002f, 0.0005f), i) ? 2 : 1;
+    // (from the eye to the point in the object's own space: 1 is the point, a hair short of it in the world)
+    got = tree.blocked(v.eyeIn, p - v.eyeIn, 1.0f - std::max(0.002f, 0.0005f / len), i) ? 2 : 1;
     return got == 1;
 }
 
@@ -1114,7 +1128,8 @@ auto App::applyShading() -> void {
 auto App::modelOf(const Object& o) -> keel::ModelId {
     const bool editingThis = mode_ == Mode::Edit && o.id == active_;
     const Mesh& mesh = shownMesh(o);
-    const uint64_t want = (meshKey(o, mesh) * 2 + editingThis) * 2 + painted(o);
+    uint64_t want = (meshKey(o, mesh) * 2 + editingThis) * 2 + painted(o);
+    want = (want ^ uint64_t(o.smooth) ^ uint64_t(std::bit_cast<uint32_t>(o.smoothAngle)) << 1) * 1099511628211ull; // (how it's lit: smooth or not, and the angle)
     auto it = models_.find(o.id);
     if (it != models_.end() && it->second.second == want) return it->second.first;
     keel::KmdlModel km;
@@ -1290,13 +1305,27 @@ auto App::draw3D(keel::Renderer& r) -> void {
                     glm::vec4 col = glm::vec4(glm::vec3(shade), (major ? (rendered ? 0.35f : 0.13f) : (rendered ? 0.16f : 0.06f)) * fade);
                     if (axis) col = dir ? (n.x > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.9f, 0.25f, 0.25f, 0.9f))
                                         : (n.z > 0.5f ? glm::vec4(0.3f, 0.75f, 0.25f, 0.9f) : glm::vec4(0.25f, 0.45f, 0.95f, 0.9f));
-                    const float w = pixelSize(target_) * (major || axis ? 1.6f : 1.0f) * kUnits;
                     const float from = mid - count * s, to = mid + count * s;
-                    const glm::vec3 a = across * at + along * from, b = across * at + along * to;
-                    if (level == 0 || std::abs(at - (dir ? cv : cu)) > inner * 1.0001f) r.drawStreak(a * kUnits, b * kUnits, w, col, keel::kWhiteTexture);
-                    else { // (a far line through the fine ring, which has it already: its two ends)
-                        r.drawStreak(a * kUnits, (across * at + along * (mid - inner)) * kUnits, w, col, keel::kWhiteTexture);
-                        r.drawStreak((across * at + along * (mid + inner)) * kUnits, b * kUnits, w, col, keel::kWhiteTexture);
+                    // (a far line through the fine ring, which has it already: only its two ends)
+                    const bool split = level == 1 && std::abs(at - (dir ? cv : cu)) <= inner * 1.0001f;
+                    const int pieces = level ? 24 : 8;
+                    for (int k = 0; k < pieces; ++k) {
+                        const float t0 = from + (to - from) * float(k) / float(pieces), t1 = from + (to - from) * float(k + 1) / float(pieces);
+                        if (split && t1 > mid - inner && t0 < mid + inner) continue;
+                        const glm::vec3 a = across * at + along * t0, b = across * at + along * t1, c = (a + b) * 0.5f;
+                        // Each piece about a pixel wide where it is, and fading as the lines get
+                        // too close together on the screen to tell apart (far off, or seen edge
+                        // on): no crawling, flickering band towards the horizon.
+                        const glm::vec3 sight = glm::normalize(c - eye_);
+                        const float px = pixelSize(c), seen = glm::length(across - sight * glm::dot(across, sight));
+                        const float apart = s * (major ? 10.0f : 1.0f) * seen / std::max(px, 1e-9f); // (pixels to the next line like it: a major line's are ten apart)
+                        glm::vec4 pc = col;
+                        pc.a *= axis ? std::max(glm::smoothstep(1.5f, 6.0f, apart), 0.35f) : glm::smoothstep(3.0f, 12.0f, apart);
+                        if (pc.a < 0.004f) continue;
+                        // (each end a hair towards the eye along its own line of sight: the same
+                        // place on the screen, but in front of the ground it lies on, so they don't fight)
+                        auto lift = [&](const glm::vec3& q) { return q + (eye_ - q) * 0.002f; };
+                        r.drawStreak(lift(a) * kUnits, lift(b) * kUnits, px * (major || axis ? 1.6f : 1.0f) * kUnits, pc, keel::kWhiteTexture);
                     }
                 }
         }

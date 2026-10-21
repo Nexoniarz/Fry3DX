@@ -35,6 +35,7 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -68,7 +69,8 @@ enum class PrintTool { None, Measure, LayFlat };
 enum class PaintTool { Brush, Eraser, Fill, Picker, Picture };
 enum class Elem { Vertex, Edge, Face };
 enum class View { Perspective, Front, Back, Left, Right, Top, Bottom };
-enum class Orient { Local, World, Normal };        // which way the gizmo's arrows point
+enum class Orient { Local, World, Normal };
+// which way the gizmo's arrows point
 enum class Pivot { Middle, Origin, Opposite, Bottom }; // what stays put when turning / sizing
 enum class Shading { Solid, Rendered, Wire };
 enum class SelShape { Box, Brush, Lasso };
@@ -284,16 +286,21 @@ class App : public keel::Game {public:
     bool dockingUi() const override { return true; }
 
     // "Spiral_stairs" is "Spiral stairs" (typed in the console).
-    static bool sameCommand(const std::string& name, std::string typed);    void init() override;
+    static bool sameCommand(const std::string& name, std::string typed);
+    void init() override;
 
     // Going into the background: the work is saved now (a phone may close the app while it's
     // away, to free memory), and a phone's next start carries on with it, view and all.
-    std::string resumeFile() const { return keel::prefPath() + "resume.txt"; }    void onBackground() override;    void resumeWork();
+    std::string resumeFile() const { return keel::prefPath() + "resume.txt"; }
+    void onBackground() override;
+    void resumeWork();
 
-    void frame(double) override { autosave(); }    bool allowQuit() override;
+    void frame(double) override { autosave(); }
+    bool allowQuit() override;
     void shutdown() override {
         if (autosaveJob_.valid()) autosaveJob_.wait();
-    }    void onEscape() override;
+    }
+    void onEscape() override;
 
     void render(keel::Renderer& r) override;
 
@@ -329,7 +336,8 @@ private:
     Tool tool_ = Tool::Move;
     Elem elem_ = Elem::Face;
     std::set<uint32_t> selected_;
-    uint32_t active_ = 0;    // the object last picked (edited in shape editing)
+    uint32_t active_ = 0;
+    // the object last picked (edited in shape editing)
     uint32_t activeRef_ = 0; // a reference picture picked in the Layers panel
     std::set<int> selVerts_, selFaces_;
     std::set<std::pair<int, int>> selEdges_;
@@ -411,7 +419,8 @@ private:
     // side, a hexagon's flats; tall: a rectangle's height)
     float holeSize_ = 0.2f, holeTall_ = 0.1f, holeDepth_ = 0.1f, holeTurn_ = 0.0f, holeRoom_ = 0.0003f;
     int holeShape_ = 0, holeSides_ = 32; // a HoleShape
-    int holeMode_ = 0;                  // 0 all the way through, 1 a pocket, 2 the outline only (a new face)
+    int holeMode_ = 0;
+    // 0 all the way through, 1 a pocket, 2 the outline only (a new face)
     struct HoleDrag {
         bool active = false;
         uint32_t object = 0;
@@ -545,7 +554,8 @@ private:
         uint64_t version = 0; // (the shape key it was made for)
         bool mirrorOnly = false;
         Mesh mesh;
-        std::future<Mesh> coming; // (a big one being made on another thread)
+        std::shared_ptr<const fry::TriangleTree> tree; // (made with it, when it was made on another thread)
+        std::future<std::pair<Mesh, std::shared_ptr<const fry::TriangleTree>>> coming; // (a big one being made on another thread)
         uint64_t comingVersion = 0;
         bool comingMirror = false;
     };
@@ -579,7 +589,8 @@ private:
     fry::CommandSearch search_;
     std::vector<std::string> recentCommands_;
     std::map<std::string, fry::Chord> myKeys_; // (a command's id: the key you gave it)
-    int pie_ = 0;                              // 1: the tools round the mouse (Space held), 2: the views (Shift+Space)
+    int pie_ = 0;
+    // 1: the tools round the mouse (Space held), 2: the views (Shift+Space)
     ImVec2 pieAt_{0, 0};
     bool pieStays_ = false; // (opened from the menu or console: until a click)
     std::string settingKey_;
@@ -587,7 +598,8 @@ private:
     // ── Workspaces: the panels as they were, kept under a name ──
     bool showWorkspaces_ = false, layoutAgain_ = false;
     std::string pendingLayout_;
-    char workspaceName_[64] = "My workspace";                   // (the command waiting for its new key, in Keys and mouse)
+    char workspaceName_[64] = "My workspace";
+    // (the command waiting for its new key, in Keys and mouse)
     // A plug-in's command waiting for its settings (the form), and a material being named.
     struct PendingCommand {
         size_t plugin = 0, command = 0;
@@ -611,7 +623,8 @@ private:
 
     // ───────────────────────────── document ─────────────────────────────
 
-    Object* find(uint32_t id);    Reference* findRef(uint32_t id);
+    Object* find(uint32_t id);
+    Reference* findRef(uint32_t id);
     Object* editing() { return mode_ == Mode::Edit ? find(active_) : nullptr; }
     void touched(uint32_t id) { versions_[id] = ++versionClock_, dirty_ = true, ++edits_; }
     // What decides the shape an object shows, as a number: its points and faces, its finishing
@@ -620,20 +633,27 @@ private:
     struct ShapeKey {
         uint64_t version = 0, key = 0;
     };
-    std::map<uint32_t, ShapeKey> shapeKeys_;    uint64_t shapeKey(const Object& o);
+    std::map<uint32_t, ShapeKey> shapeKeys_;
+    uint64_t shapeKey(const Object& o);
     void touchAll() {
         for (const Object& o : scene_.objects) versions_[o.id] = ++versionClock_;
     }
     // Its shape has been changed by hand: the library settings no longer apply.
-    void handMade(Object& o) { o.recipe.clear(), o.settings.clear(); }    void say(std::string text);
+    void handMade(Object& o) { o.recipe.clear(), o.settings.clear(); }
+    void say(std::string text);
 
     void pushUndo();
     // The undo point just made, dropped (what it was for didn't happen): redo as it was before.
     void dropUndo();
     // Back to the undo point just made, and it dropped.
-    void takeBack();    void restore(Snapshot& s);    void undo();    void redo();
+    void takeBack();
+    void restore(Snapshot& s);
+    void undo();
+    void redo();
 
-    void newScene();    Object& addObject(const std::string& base, Mesh mesh);    std::string uniqueName(const std::string& base);
+    void newScene();
+    Object& addObject(const std::string& base, Mesh mesh);
+    std::string uniqueName(const std::string& base);
 
     // A shape from the library, standing on the ground under the middle of the view.
     void addShape(const std::string& id, bool undoable = true);
@@ -657,21 +677,27 @@ private:
     // A picked file copied to a file of our own to read ("" if it couldn't be).
     static std::string fromUri(const std::string& uri, const std::string& name);
     // A file of ours written into the picked one.
-    static bool toUri(const std::string& local, const std::string& uri);    static std::string tempFile(const std::string& name);
+    static bool toUri(const std::string& local, const std::string& uri);
+    static std::string tempFile(const std::string& name);
 
-    void openFile(const std::string& picked);    bool saveFile(std::string path);
+    void openFile(const std::string& picked);
+    bool saveFile(std::string path);
     static std::string sizeText(uintmax_t n) {
         return n < 10240 ? std::format("{} bytes", n) : n < 10 << 20 ? std::format("{} KB", n >> 10) : std::format("{:.1f} MB", double(n) / 1048576.0);
-    }    static std::vector<uint8_t> pngBytes(const Image& im);    void exportFile(std::string path, int filter = -1, const std::string& asExt = "");
+    }
+    static std::vector<uint8_t> pngBytes(const Image& im);
+    void exportFile(std::string path, int filter = -1, const std::string& asExt = "");
 
     // ── Closing with changes, autosave ──
 
     // New, Open, Quit: asks about saving first if there are changes.
-    void whenSaved(int action);    void doAfterAsking(int action);
+    void whenSaved(int action);
+    void doAfterAsking(int action);
     // A file dropped on the window (or opened with Fry3DX from the desktop): a .fry opens (after
     // asking about changes), a script goes in the Script panel, a picture goes on as a reference
     // (or, in the Paint tab, as a sticker on the model).
-    void onFileDropped(const std::string& path) override;    void saveQuestion();
+    void onFileDropped(const std::string& path) override;
+    void saveQuestion();
     std::string autosaveDir() const { return keel::prefPath() + "autosave/"; }
     // Every fry_autosave minutes (when there are changes and nothing's being dragged): a copy
     // packed as small as it goes, in the background.
@@ -680,44 +706,72 @@ private:
     void dropAutosave();
     // Autosaves left behind (it didn't close properly): offered back. Only the newest 15 are
     // kept; older ones are deleted.
-    void findAutosaves();    void recoverWindow();
+    void findAutosaves();
+    void recoverWindow();
 
     // A picture of the 3D view only (no panels, gizmos or outlines): the screen is saved a few
     // frames on, with those hidden, then cut down to the view.
     void savePicture(std::string path);
-    bool capturing() const { return captureFrames_ > 0; }    void captureStep();    static bool loadImageFile(const std::string& path, Image& out);
-    static bool writePng(const std::string& path, const Image& im) { return stbi_write_png(path.c_str(), im.w, im.h, 4, im.px.data(), im.w * 4) != 0; }    void addPicture(const std::string& path);
+    bool capturing() const { return captureFrames_ > 0; }
+    void captureStep();
+    static bool loadImageFile(const std::string& path, Image& out);
+    static bool writePng(const std::string& path, const Image& im) { return stbi_write_png(path.c_str(), im.w, im.h, 4, im.px.data(), im.w * 4) != 0; }
+    void addPicture(const std::string& path);
 
     // SDL's own file dialogs (the desktop's): the answer comes back later, maybe on another thread.
-    void dialog(int kind);    void takeDialogResult();
+    void dialog(int kind);
+    void takeDialogResult();
 
     // ───────────────────────────── modes and tools ─────────────────────────────
 
-    void setTool(Tool t);    void enterEdit();    void leaveEdit();
-    void clearElements() { selVerts_.clear(), selFaces_.clear(), selEdges_.clear(); }    void selectAllElements();    void selectAll();    void selectNone();
+    void setTool(Tool t);
+    void enterEdit();
+    void leaveEdit();
+    void clearElements() { selVerts_.clear(), selFaces_.clear(), selEdges_.clear(); }
+    void selectAllElements();
+    void selectAll();
+    void selectNone();
     // The points the selection covers, whichever kind is picked.
     std::set<int> selectedPoints();
     // Selects (in the current kind) what these points cover.
     void selectPoints(const std::set<int>& pts);
     void growSelection() {
         if (Object* o = editing()) selectPoints(growVerts(o->mesh, selectedPoints()));
-    }    void shrinkSelection();
+    }
+    void shrinkSelection();
     // Like the picked: faces that face the same way, edges as long, points with as many edges.
     void selectSimilar();
     // The picked edges' whole loops (or the rings across them).
     void loopsOfSelected(bool ring);
     void selectLinked() {
         if (Object* o = editing()) selectPoints(linkedVerts(o->mesh, selectedPoints()));
-    }    void invertSelection();
+    }
+    void invertSelection();
     // The edges a rounding would work on: those selected, or round the selected faces, or between
     // selected points.
     std::set<std::pair<int, int>> edgesToRound();
 
     void deleteElements();
     // After a change that renumbers things: nothing selected, the shape is hand-made now.
-    void changedShape(Object& o, bool keepSelection = false);    void extrudeNow(float amount);    void insetNow(float amount);    void bevelNow();    void subdivideNow(bool smooth);    void cutAt(Object& o, std::pair<int, int> edge);    void makeFaceNow();    void mergeNow();    void smoothPointsNow();    void startPush();    void pushWindow();    void bridgeNow();    void flipNow();
+    void changedShape(Object& o, bool keepSelection = false);
+    void extrudeNow(float amount);
+    void insetNow(float amount);
+    void bevelNow();
+    void subdivideNow(bool smooth);
+    void cutAt(Object& o, std::pair<int, int> edge);
+    void makeFaceNow();
+    void mergeNow();
+    void smoothPointsNow();
+    void startPush();
+    void pushWindow();
+    void bridgeNow();
+    void flipNow();
     // Rotation and scale baked into the points (so the object's turn is none and its size is 1).
-    void applyTransform(Object& o);    void applyFinish(Object& o);    void originToMiddle(Object& o);    void originToBottom(Object& o);    void mirror(Object& o, int axis);
+    void applyTransform(Object& o);
+    void applyFinish(Object& o);
+    void originToMiddle(Object& o);
+    void originToBottom(Object& o);
+    void mirror(Object& o, int axis);
 
 
     // ───────────────────────────── tabs ─────────────────────────────
@@ -728,16 +782,19 @@ private:
     // ───────────────────────────── the knife and holes ─────────────────────────────
 
     // Snapped to steps of 45 degrees from the last point while Ctrl is held.
-    ImVec2 knifeEnd(const ImGuiIO& io) const;    static Mesh subMesh(const Mesh& m, const std::set<int>& faces);
+    ImVec2 knifeEnd(const ImGuiIO& io) const;
+    static Mesh subMesh(const Mesh& m, const std::set<int>& faces);
     // A new object like `from` (its look, place and finish), with another shape.
-    uint32_t objectLike(uint32_t from, Mesh mesh, const std::string& name);    void knifeApply(uint32_t id, std::vector<ImVec2> pts);
+    uint32_t objectLike(uint32_t from, Mesh mesh, const std::string& name);
+    void knifeApply(uint32_t id, std::vector<ImVec2> pts);
     static float objectScale(const Object& o) { return std::max(std::cbrt(std::abs(glm::determinant(glm::mat3(objectMatrix(o))))), 1e-6f); }
     // How wide (across) a shape is when it reaches `reach` from its middle (dragging it out).
     float holeAcrossFor(float reach) const {
         return HoleShape(holeShape_) == HoleShape::Triangle || HoleShape(holeShape_) == HoleShape::Hexagon ? reach * std::sqrt(3.0f) : reach * 2.0f;
     }
     // The outline, `across` wide in the object's own size (a rectangle keeps its proportions).
-    std::vector<glm::vec3> holeShapeOutline(const Object& o, int face, const glm::vec3& centre, float across) const;    void applyHole(uint32_t id, int face, const glm::vec3& centre, float across);
+    std::vector<glm::vec3> holeShapeOutline(const Object& o, int face, const glm::vec3& centre, float across) const;
+    void applyHole(uint32_t id, int face, const glm::vec3& centre, float across);
     // The hole tool's outline under the mouse (or being dragged out), in the world.
     std::vector<glm::vec3> holePreview(const ImGuiIO& io);
     // Where the mouse is on a face's plane (the object's own space).
@@ -749,7 +806,9 @@ private:
     // out on a picture (made the plain colour of it at first).
     Object* readyToPaint(uint32_t id);
     // The object's picture, copied so this change can be undone; the copy is now the object's.
-    Image& changePicture(Object& o);    void beginStroke(Object& o, bool in2D);    void endStroke();
+    Image& changePicture(Object& o);
+    void beginStroke(Object& o, bool in2D);
+    void endStroke();
     // Where on its picture a ray hits an object (0..1), or nothing.
     std::optional<glm::vec2> uvUnder(const Object& o, const Ray& ray);
     // One dab of the brush on the model: on every face near it, into the picture where that face
@@ -759,31 +818,40 @@ private:
     // it on the screen (the mirrored dab: where its mirror image does, `back` taking it there).
     void dab3D(Object& o, const glm::vec3& at, float radius, const glm::vec3* eyeAt = nullptr, const glm::mat4* back = nullptr);
     // The brush at a point of the view: starts a stroke on what's there, or carries one on.
-    void paintAt(ImVec2 mouse, bool start);    void pickColor(const Object& o, glm::vec2 uv);    void fillAt(Object& o, glm::vec2 uv);
+    void paintAt(ImVec2 mouse, bool start);
+    void pickColor(const Object& o, glm::vec2 uv);
+    void fillAt(Object& o, glm::vec2 uv);
 
     // ── Sculpting ──
 
     // The object ready to sculpt: its finishing touches made part of it, and made finer (the same
     // shape) if it has too few points to push about.
-    Object* readyToSculpt(uint32_t id);    void endSculpt();
+    Object* readyToSculpt(uint32_t id);
+    void endSculpt();
     // The brush at a point of the view: starts a stroke on what's there, or carries one on.
-    void sculptAt(ImVec2 mouse, bool start, bool ctrl, bool shift);    void sculptViewport(const ImGuiIO& io);
+    void sculptAt(ImVec2 mouse, bool start, bool ctrl, bool shift);
+    void sculptViewport(const ImGuiIO& io);
 
     // ── Picture layers ──
 
     PictureLayer* editLayer();
     // A picture put on the selected object as a new layer, unlocked to be moved: a sticker on the
     // surface in the middle of the view, or pinned onto the flat picture.
-    void startFloating(Image img);    void floatFromFile(const std::string& path);    void pasteFromClipboard();
+    void startFloating(Image img);
+    void floatFromFile(const std::string& path);
+    void pasteFromClipboard();
     // Enter: it stays where it is, a layer (click it in the Picture panel to move it again).
-    void lockLayer();    void unlockLayer(uint32_t object, int index);
+    void lockLayer();
+    void unlockLayer(uint32_t object, int index);
     // Esc: a picture just pasted goes again; one unlocked is locked again.
-    void cancelFloating();    void deleteLayer(Object& o, int i);
+    void cancelFloating();
+    void deleteLayer(Object& o, int i);
     // The layer painted into the painting for good (it can't be moved after).
     void mergeLayer(Object& o, int i);
     // The handles of a sticker being moved, in the world: its corners (top-left, top-right,
     // bottom-right, bottom-left), its turning handle, its middle — on its face's plane.
-    bool stickerHandles(const Object& o, const PictureLayer& l, std::array<glm::vec3, 6>& out);    int stickerHandle(const Object& o, const PictureLayer& l, ImVec2 mouse);
+    bool stickerHandles(const Object& o, const PictureLayer& l, std::array<glm::vec3, 6>& out);
+    int stickerHandle(const Object& o, const PictureLayer& l, ImVec2 mouse);
     // Moving a sticker on the model: it slides over the surface (onto other faces too), its
     // corners size it, its handle turns it.
     void stickerMouse(const ImGuiIO& io);
@@ -800,12 +868,14 @@ private:
     // What's picked, as (face, corner) pairs of its layout.
     std::vector<std::pair<int, int>> layoutPicked(const Object& o, const std::vector<std::vector<int>>& islands) const;
     // A corner and every other on the same point of the model at the same place on the picture.
-    std::set<std::pair<int, int>> layoutCorner(const Object& o, int f, int c) const;    void layoutSelectAll();
+    std::set<std::pair<int, int>> layoutCorner(const Object& o, int f, int c) const;
+    void layoutSelectAll();
     // The picked corners moved by `to` (picture pixels), painting carried along if wanted.
     void layoutChange(Object& o, const std::vector<std::vector<glm::vec2>>& from, const std::shared_ptr<const Image>& picture,
                       const std::vector<std::pair<int, int>>& picked, const std::function<glm::vec2(glm::vec2)>& to, bool final);
     // Buttons' changes (turn, flip, straighten): about the middle of what's picked.
-    void layoutApply(const std::function<glm::vec2(glm::vec2, glm::vec2)>& to);    void layoutStraighten();
+    void layoutApply(const std::function<glm::vec2(glm::vec2, glm::vec2)>& to);
+    void layoutStraighten();
     // Laid out again by itself, what's painted carried over onto the new layout.
     void layoutAgain(Object& o);
 
@@ -954,36 +1024,58 @@ private:
         }
     }
     // In the 3D view: clicking the model picks the frame its face is in (Shift: add).
-    void layoutViewport(const ImGuiIO& io);    void layoutOverlay(ImDrawList* dl);    void layoutToolbox(float w);    void layoutOptions(float w);    void layoutProperties(float w);
+    void layoutViewport(const ImGuiIO& io);
+    void layoutOverlay(ImDrawList* dl);
+    void layoutToolbox(float w);
+    void layoutOptions(float w);
+    void layoutProperties(float w);
 
     // ───────────────────────────── the Print tab ─────────────────────────────
 
-    glm::vec3 bedSize() const;    const PrintInfo& printInfo(const Object& o);    std::vector<Object*> printTargets();    void drawPrintBed(keel::Renderer& r, const keel::ModelLighting& light);    void putOnBed();    void middleOfBed();
+    glm::vec3 bedSize() const;
+    const PrintInfo& printInfo(const Object& o);
+    std::vector<Object*> printTargets();
+    void drawPrintBed(keel::Renderer& r, const keel::ModelLighting& light);
+    void putOnBed();
+    void middleOfBed();
     // Everything picked made `mm` big along `axis`, keeping its shape, standing where it stood.
     void printResize(int axis, float mm);
     // Everything picked made `k` times as big, standing where it stood.
     void printScale(float k);
     // The scaler: by a share, to fit the plate, or from the wrong units (a model made in inches,
     // centimetres or metres comes in 25.4, 10 or 1000 times off).
-    float scalePercent_ = 100.0f;    void printScaler(float w);    void printSizeWindow();    void printToolbox(float w);    void printOptions(float w);    void printViewport(const ImGuiIO& io);
+    float scalePercent_ = 100.0f;
+    void printScaler(float w);
+    void printSizeWindow();
+    void printToolbox(float w);
+    void printOptions(float w);
+    void printViewport(const ImGuiIO& io);
     // Where the mouse is on the model (a corner if near one), or on the bed.
     std::optional<glm::vec3> measurePoint(ImVec2 mouse);
     // The slice preview: where the printer goes round at the chosen layer, over the model.
-    void layerOverlay(ImDrawList* dl);    void printOverlay(ImDrawList* dl, const ImGuiIO& io);    void printProperties(float w);
+    void layerOverlay(ImDrawList* dl);
+    void printOverlay(ImDrawList* dl, const ImGuiIO& io);
+    void printProperties(float w);
 
     // ───────────────────────────── layers: folders and going to things ─────────────────────────────
 
-    Folder* findFolder(uint32_t id);    bool inFolder(uint32_t folder, uint32_t within);    std::set<uint32_t> objectsIn(uint32_t folder);
+    Folder* findFolder(uint32_t id);
+    bool inFolder(uint32_t folder, uint32_t within);
+    std::set<uint32_t> objectsIn(uint32_t folder);
     // The camera brought round to these (as framing them, but keeping the way it looks).
     void goTo(const std::set<uint32_t>& ids);
     // The picked objects into a new folder (Ctrl+G): a group, picked and moved together.
     void groupSelected();
     // Ungrouped: what's inside goes up a level, the folder goes.
-    void ungroup(uint32_t id);    void deleteFolder(uint32_t id);
+    void ungroup(uint32_t id);
+    void deleteFolder(uint32_t id);
     // A folder's eye or lock: all in it the same.
-    void showFolder(Folder& f, bool on);    void lockFolder(Folder& f, bool on);    void moveToFolder(const std::set<uint32_t>& ids, uint32_t folder);
+    void showFolder(Folder& f, bool on);
+    void lockFolder(Folder& f, bool on);
+    void moveToFolder(const std::set<uint32_t>& ids, uint32_t folder);
     // Only these shown (again: everything shown).
-    void showOnly(const std::set<uint32_t>& ids);    void folderMenu(uint32_t into, const std::set<uint32_t>& ids, int depth = 0);
+    void showOnly(const std::set<uint32_t>& ids);
+    void folderMenu(uint32_t into, const std::set<uint32_t>& ids, int depth = 0);
     // What a right-click on an object (or the picked ones) offers.
     void objectMenu(Object& o);
     // A row's show / hide or lock button: the picture of how it is now, dim when it's the usual way.
@@ -997,14 +1089,19 @@ private:
 
     // The last picked object with the others added, taken out of it, or only where they overlap
     // kept; the others go.
-    void combineSelected(Combine op);    void makeCopies();    void copiesWindow();    void thickenActive();
+    void combineSelected(Combine op);
+    void makeCopies();
+    void copiesWindow();
+    void thickenActive();
     // A model made elsewhere: each of its objects, standing on the ground in the middle of the view.
     void importFile(const std::string& file);
 
     // ── Spin: an outline turned round an axis (a vase, a wheel, a ring), or a screw ──
     bool showSpin_ = false, spinWorld_ = false, spinKeep_ = false;
     int spinAxis_ = 2, spinSteps_ = 48;
-    float spinDegrees_ = 360.0f, spinRise_ = 0.0f;    void spinWindow();    void spinSelected();
+    float spinDegrees_ = 360.0f, spinRise_ = 0.0f;
+    void spinWindow();
+    void spinSelected();
 
     // ── Text as a shape ──
     bool showText_ = false;
@@ -1014,9 +1111,12 @@ private:
     bool textStanding_ = false;
     std::string textFontFile_; // (a font of your own, picked from a file)
     static constexpr const char* kFonts[] = {"Instrument Sans", "Instrument Sans (semi-bold)", "Instrument Sans (bold)", "JetBrains Mono"};
-    static constexpr const char* kFontFiles[] = {"fonts/InstrumentSans-Regular.ttf", "fonts/InstrumentSans-SemiBold.ttf", "fonts/InstrumentSans-Bold.ttf", "fonts/JetBrainsMono-Regular.ttf"};    void textWindow();    void addText();
+    static constexpr const char* kFontFiles[] = {"fonts/InstrumentSans-Regular.ttf", "fonts/InstrumentSans-SemiBold.ttf", "fonts/InstrumentSans-Bold.ttf", "fonts/JetBrainsMono-Regular.ttf"};
+    void textWindow();
+    void addText();
 
-    void thickenWindow();    void cleanFlatFaces();
+    void thickenWindow();
+    void cleanFlatFaces();
 
     // ───────────────────────────── touch: phones and tablets ─────────────────────────────
     // A phone: everything drawn bigger, the side panels only when asked for, a bar of big buttons
@@ -1026,7 +1126,8 @@ private:
 
     bool touch() const { return touchMode_; }
     // How much bigger than its pixels the UI is drawn.
-    float touchScale() const;    void touchFrame(ImGuiIO& io);
+    float touchScale() const;
+    void touchFrame(ImGuiIO& io);
     // The bar along the bottom of the view: big buttons, in rows if the view's narrow.
     void touchBar();
 
@@ -1034,11 +1135,16 @@ private:
 
     glm::vec3 viewDir() const { return forwardOf(yaw_, pitch_); }
     float viewHeight() const { return 2.0f * dist_ * std::tan(glm::radians(fov_) * 0.5f); } // metres across the view's height at the target
-    void setView(View v);    void leaveFlatView();    void frameBox(glm::vec3 lo, glm::vec3 hi);    void frameAll();    void frameSelected();
+    void setView(View v);
+    void leaveFlatView();
+    void frameBox(glm::vec3 lo, glm::vec3 hi);
+    void frameAll();
+    void frameSelected();
 
     bool mouseInView(const ImGuiIO& io) const;
 
-    void orbitBy(ImVec2 d);    void panBy(ImVec2 d);
+    void orbitBy(ImVec2 d);
+    void panBy(ImVec2 d);
 
     void updateCamera(ImGuiIO& io);
     // Where the eye is and how the view maps to the screen, from the camera as it is now: again
@@ -1050,7 +1156,9 @@ private:
 
     // World point → screen (false behind the eye).
     // The window and its view are up (commands given at the start run before the first frame).
-    bool viewReady() const { return ImGui::GetCurrentContext() && viewMax_.x - viewMin_.x > 1 && viewMax_.y - viewMin_.y > 1; }    bool project(const glm::vec3& p, ImVec2& out) const;    Ray mouseRay(ImVec2 m) const;
+    bool viewReady() const { return ImGui::GetCurrentContext() && viewMax_.x - viewMin_.x > 1 && viewMax_.y - viewMin_.y > 1; }
+    bool project(const glm::vec3& p, ImVec2& out) const;
+    Ray mouseRay(ImVec2 m) const;
     // How many metres a pixel is, at a point.
     float pixelSize(const glm::vec3& at) const;
 
@@ -1086,11 +1194,10 @@ private:
     Hit pickObject(const Ray& ray, uint32_t only = 0, bool base = false);
     // Each object's triangles in the world, in a tree of boxes: made again only when it changes
     // (its shape, where it is), not each time something's picked.
-    struct Tree {
+    struct Tree { // (in the object's own space: moving it doesn't make it again)
         uint64_t version = 0;
-        glm::mat4 matrix{0.0f};
         size_t faces = 0;
-        fry::TriangleTree tree;
+        std::shared_ptr<const fry::TriangleTree> tree;
     };
     std::map<std::pair<uint32_t, bool>, Tree> trees_; // (an object's own mesh, or the one shown)
     const fry::TriangleTree& treeOf(const Object& o, const Mesh& mesh);
@@ -1102,7 +1209,8 @@ private:
     struct Visibility {
         uint64_t version = 0;
         glm::vec3 eye{1e30f};
-        glm::mat4 vp{0.0f};
+        glm::mat4 vp{0.0f}, matrix{0.0f};
+        glm::vec3 eyeIn{0.0f}; // (the eye in the object's own space)
         std::vector<char> point; // 0 not tried yet, 1 seen, 2 hidden
     };
     std::map<std::pair<uint32_t, bool>, Visibility> visibility_; // (an object's own mesh, or the one shown)
@@ -1113,9 +1221,11 @@ private:
         uint64_t version = 0;
         size_t verts = 0, faces = 0;
         std::vector<std::array<int, 4>> edges; // a, b, a face, the other (or -1)
-        std::vector<glm::vec4> plane;          // each face's normal, and its distance along it
+        std::vector<glm::vec4> plane;
+        // each face's normal, and its distance along it
     };
-    std::map<std::pair<uint32_t, bool>, Adjacency> adjacency_;    const Adjacency& adjacencyOf(const Object& o, const Mesh& mesh);
+    std::map<std::pair<uint32_t, bool>, Adjacency> adjacency_;
+    const Adjacency& adjacencyOf(const Object& o, const Mesh& mesh);
     bool pointSeen(const Object& o, int v) { return xray_ || seen(o, o.mesh, v); }
 
     // The edge of the edited object nearest the mouse on screen (that can be seen), or (-1, -1).
@@ -1133,9 +1243,11 @@ private:
 
     bool hasSelection();
     // Every point of the selection, in the world.
-    std::vector<glm::vec3> selectionPoints();    glm::vec3 pivotOfSelection();
+    std::vector<glm::vec3> selectionPoints();
+    glm::vec3 pivotOfSelection();
     // The selection's box, in a gizmo's axes.
-    std::pair<glm::vec3, glm::vec3> selectionBox(const Axes& a);    glm::vec3 selectionMiddle(const Axes& a);
+    std::pair<glm::vec3, glm::vec3> selectionBox(const Axes& a);
+    glm::vec3 selectionMiddle(const Axes& a);
     Orient& orient() { return mode_ == Mode::Edit ? orientEdit_ : orientObject_; }
     // The gizmo's axes: the object's own (turning with it), the world's, or (shape editing) the
     // way the selected faces face — so "up" on a side face is out of that face.
@@ -1157,7 +1269,8 @@ private:
     void startDrag(const ImGuiIO& io, int handle);
     // The points within reach of the selection (in the world: the object's size counts), each with
     // how much it follows: a grid of the selected points, so a big mesh stays quick.
-    void findSoft();    void cancelDrag();
+    void findSoft();
+    void cancelDrag();
 
     void updateDrag(const ImGuiIO& io);
     // Mirror editing: each point that moved, its twin across the shape's own X (the point that was
@@ -1167,21 +1280,25 @@ private:
     // what's being moved. Marked with a ring.
     std::optional<glm::vec3> snapTarget(ImVec2 mouse, float within = 22.0f);
     // The number typed while dragging, if any (just "-" or "." is none yet).
-    std::optional<float> typed() const;    void dragNow(const ImGuiIO& io);
+    std::optional<float> typed() const;
+    void dragNow(const ImGuiIO& io);
 
     // ───────────────────────────── drawing a shape ─────────────────────────────
 
     // The plane shapes are drawn on: the one the view looks straight at, or the ground.
     void workPlane(glm::vec3& point, glm::vec3& normal) const;
     // The plane drawn on: the face under the first point if it was on an object, else the view's.
-    void drawPlane(glm::vec3& p, glm::vec3& n);    std::optional<glm::vec3> drawPoint(const ImGuiIO& io);
+    void drawPlane(glm::vec3& p, glm::vec3& n);
+    std::optional<glm::vec3> drawPoint(const ImGuiIO& io);
     std::string sketchTyped_; // (drawing a shape: the next line's length, typed)
     // Drawing a shape: numbers typed go to the next line's length, Enter puts the point there.
-    bool sketchKeys(const ImGuiIO& io);    void finishShape();
+    bool sketchKeys(const ImGuiIO& io);
+    void finishShape();
 
     // ───────────────────────────── the viewport's mouse ─────────────────────────────
 
-    void viewport(ImGuiIO& io);    void addDrawPoint(const ImGuiIO& io);
+    void viewport(ImGuiIO& io);
+    void addDrawPoint(const ImGuiIO& io);
     // Painting: on the model under the mouse.
     void paintViewport(ImGuiIO& io);
 
@@ -1209,7 +1326,8 @@ private:
 
     const Picture& picture(const Reference& ref);
 
-    void loadLogo();    void logoImage(float size);
+    void loadLogo();
+    void logoImage(float size);
     // A picture of ours in the UI, read the way ImGui's colours are (not turned linear: too dark).
     void uiImage(ImDrawList* dl, keel::TextureId t, ImVec2 a, ImVec2 b);
 
@@ -1220,7 +1338,8 @@ private:
     // (the Print tab's: the printer's plate and overhangs)
     // On top of the scene: outlines and wires, points, the gizmo, the selection shapes.
     // An empty scene: how to start, in the middle of the view (gone once there's anything).
-    void emptyHints(ImDrawList* dl);    void overlays();
+    void emptyHints(ImDrawList* dl);
+    void overlays();
 
     void gizmo(ImDrawList* dl, const ImGuiIO& io);
 
@@ -1240,13 +1359,18 @@ private:
     // ───────────────────────────── commands ─────────────────────────────
 
     // Everything that can be done, by name: for the command search, keys of your own, the pies.
-    void buildCommands();    void openSearch();    void runCommand(const std::string& id); void commandItem(const char* id);    void commandSearch();
+    void buildCommands();
+    void openSearch();
+    void runCommand(const std::string& id); void commandItem(const char* id);
+    void commandSearch();
     // The pies: the tools (Space), or the views (Shift+Space), round the mouse while it's held.
     void pieFrame(ImGuiIO& io);
     // Keys of your own: kept in keys.txt (a line each: the command's id, a tab, the key).
-    void loadMyKeys();    void saveMyKeys();
+    void loadMyKeys();
+    void saveMyKeys();
 
-    void menus();    void menuBar();
+    void menus();
+    void menuBar();
 
     void addMenuItems();
 
@@ -1280,7 +1404,8 @@ private:
 
     void paintOptions(float w);
 
-    void softChoice(float w);    void toolOptions();
+    void softChoice(float w);
+    void toolOptions();
 
     void layersPanel();
 
@@ -1325,22 +1450,47 @@ private:
     // is taken back.
     void runScriptNow();
     // After a script or plug-in command: kept as one undo step, or all taken back on an error.
-    void finishRun(const fry::ScriptResult& r, const std::string& name, bool frame);    void openScript(const std::string& path, const std::string& shownName);    void saveScript(std::string file);
+    void finishRun(const fry::ScriptResult& r, const std::string& name, bool frame);
+    void openScript(const std::string& path, const std::string& shownName);
+    void saveScript(std::string file);
     // The scripts that come with it (content/Fry3DX/scripts), as menu items that add one.
-    void exampleScripts();    void exampleItems(bool selectable);
+    void exampleScripts();
+    void exampleItems(bool selectable);
+
+    // ── fry_bench: frames timed while the camera turns or a setting's dragged (finding what's slow) ──
+    struct Bench {
+        std::string what;
+        int left = 0;
+        std::vector<double> ms;
+    } bench_;
+    void benchStep();
+    void benchEnd(std::chrono::steady_clock::time_point began);
 
     // ── Own materials (materials.txt in the settings folder) ──
-    static std::string ownMaterialsPath() { return keel::prefPath() + "materials.txt"; }    void loadOwnMaterials();    void saveOwnMaterials();
+    static std::string ownMaterialsPath() { return keel::prefPath() + "materials.txt"; }
+    void loadOwnMaterials();
+    void saveOwnMaterials();
 
     // ── Plug-ins: content/Fry3DX/plugins (they come with it) and the settings folder's plugins ──
-    static std::string pluginsFolder() { return keel::prefPath() + "plugins/"; }    std::set<std::string> pluginsOff() const;    void setPluginOn(const std::string& file, bool on);    void loadPlugins();    void copyPlugin(const PluginEntry& e);    void openPluginsFolder();
-    bool pluginUsable(size_t i) const { return i < plugins_.size() && plugins_[i].p && plugins_[i].error.empty(); }    void pluginMenuItems(const char* menu);    void pluginMenuItem(size_t i, size_t c);    void runPluginCommand(size_t i, size_t c, const std::vector<double>& values);
+    static std::string pluginsFolder() { return keel::prefPath() + "plugins/"; }
+    std::set<std::string> pluginsOff() const;
+    void setPluginOn(const std::string& file, bool on);
+    void loadPlugins();
+    void copyPlugin(const PluginEntry& e);
+    void openPluginsFolder();
+    bool pluginUsable(size_t i) const { return i < plugins_.size() && plugins_[i].p && plugins_[i].error.empty(); }
+    void pluginMenuItems(const char* menu);
+    void pluginMenuItem(size_t i, size_t c);
+    void runPluginCommand(size_t i, size_t c, const std::vector<double>& values);
     // A plug-in command's settings, asked for before it runs.
-    void commandForm();    void pluginsWindow();    static int growString(ImGuiInputTextCallbackData* d);
+    void commandForm();
+    void pluginsWindow();
+    static int growString(ImGuiInputTextCallbackData* d);
     // A one-line field for a std::string (it grows as it's typed into).
     static bool inputString(const char* label, std::string& text, const char* hint = nullptr) {
         return ImGui::InputTextWithHint(label, hint ? hint : "", text.data(), text.capacity() + 1, ImGuiInputTextFlags_CallbackResize, growString, &text);
-    }    void scriptPanel();
+    }
+    void scriptPanel();
 
     void helpWindow();
 
@@ -1363,11 +1513,17 @@ private:
         std::vector<int> pts;
         std::vector<std::vector<int>> rails; // (each point's neighbours that aren't picked: where it can go)
         ImVec2 start{0, 0};
-    } slide_;    void startSlide();    void cancelSlide();    void slideFrame(const ImGuiIO& io);
+    } slide_;
+    void startSlide();
+    void cancelSlide();
+    void slideFrame(const ImGuiIO& io);
 
     // Looking straight at a reference picture's plane (the front picture from the front or the back...).
     bool lookingAt(Axis a) const;
-    std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }    void resetLayout();    void workspacesWindow();    static std::string fileSafe(std::string n);
+    std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }
+    void resetLayout();
+    void workspacesWindow();
+    static std::string fileSafe(std::string n);
 
     // The steps that can be undone, oldest first: a click goes back (or on) to just after it.
     void historyWindow();
