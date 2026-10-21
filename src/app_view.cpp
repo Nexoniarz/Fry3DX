@@ -285,7 +285,9 @@ auto App::updateCamera(ImGuiIO& io) -> void {
             float size = 0.0f; // (the biggest object's size: the least step is a little of it)
             for (const Object& o : scene_.objects)
                 size = std::max(size, reachOf(o).radius * std::max({std::abs(o.scale.x), std::abs(o.scale.y), std::abs(o.scale.z)}));
-            const float step = std::clamp(std::max(dist_ * 0.2f, size * 0.05f), 0.001f, 500.0f) * fry_movespeed.f();
+            // (what's ahead: no further than ten times how far the nearest thing is, so with only
+            // the sky or the far ground ahead a notch doesn't leap)
+            const float step = std::clamp(std::max(std::min(dist_, nearest_ * 10.0f) * 0.2f, size * 0.05f), 0.001f, 500.0f) * fry_movespeed.f();
             target_ += viewDir() * step * io.MouseWheel;
             refocus();
         }
@@ -334,7 +336,10 @@ auto App::nearFar() -> glm::vec2 {
     // the nearer it is, the more surfaces flicker through each other. Nothing is nearer than the
     // nearest thing, and a quarter of the way to it keeps even the screen's corners clear of it)
     const float nearM = std::clamp(std::max(viewScale() * 0.005f, nearest_ * 0.25f), 1e-5f, 50.0f);
-    const float farM = std::max({dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, 100.0f});
+    // (far enough for the whole scene and the ground out to near the horizon; what it looks at
+    // too when it turns round that (flying, that jumps between the ground and the sky as it moves))
+    const bool flying = view_ == View::Perspective && fry_camera.i() != 1;
+    const float farM = std::max({flying ? 0.0f : dist_ * 60.0f, (glm::length(eye_) + reach) * 2.0f, std::abs(eye_.z) * 2000.0f, 100.0f});
     return glm::vec2(nearM, farM) * kUnits;
 }
 
@@ -1399,17 +1404,17 @@ auto App::draw3D(keel::Renderer& r) -> void {
     // lines come in too close together to see and fade in. Each line is drawn by the widest set
     // it belongs to (once), in pieces, each a pixel wide where it is.
     if (tab_ == Tab::Render ? renderGrid_ : showGrid_) {
-        // Worked out for each pixel (as in Blender): four sets of lines from a tenth of the
-        // grid step, each showing by how far apart its lines are on the screen, the axes
-        // coloured; round the point under the eye, out to where the widest set ends.
+        // Worked out for each pixel (as in Blender): lines every 10^n metres, each set showing by
+        // how far apart its lines are on the screen, the axes coloured; round the point under the
+        // eye, out to most of the way to the far plane.
         glm::vec3 p, n;
         workPlane(p, n);
         const glm::vec3 u = n.z > 0.5f ? glm::vec3(1, 0, 0) : n.x > 0.5f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
         const glm::vec3 v = glm::cross(n, u);
-        const float first = gridStep() * 0.1f, reach = std::max(first * 20000.0f, nearFar_.y / kUnits * 0.5f);
+        const float reach = nearFar_.y / kUnits * 0.9f;
         const glm::vec3 under = eye_ - n * glm::dot(eye_, n); // (the grid's plane goes through the origin)
         const glm::vec3 look = rendered ? glm::vec3(0.0f, 0.14f, 0.4f) : glm::vec3(1.0f, 0.05f, 0.16f); // (dark lines on the sunny ground, light ones in the grey room)
-        r.drawGrid(under * kUnits, u, v, first * kUnits, look, reach * kUnits);
+        r.drawGrid(under * kUnits, u, v, kUnits, look, reach * kUnits);
     }
     if (tab_ == Tab::Print) drawPrintBed(r, light);
 }

@@ -1,5 +1,6 @@
 // Fry3DX: scripts, your own materials, plug-ins, the windows that go with them.
 #include "app.h"
+#include "fry_project.h"
 
 using namespace fry;
 namespace stdfs = std::filesystem;
@@ -747,14 +748,13 @@ auto App::aboutWindow() -> void {
     logoImage(logo);
     ImGui::Dummy(ImVec2(0, 6));
     ImGui::PushFont(keel::ui::font(keel::ui::Font::Title), 30.0f);
-    centred("Fry3DX", roleColor(Role::Text));
+    centred(project::name, roleColor(Role::Text));
     ImGui::PopFont();
-    centred("Frying 3D Extreme", accentText());
-    centred("Version " FRY_VERSION, roleColor(Role::TextSecondary));
+    centred(project::long_, accentText());
+    centred(std::format("Version {}", project::version).c_str(), roleColor(Role::TextSecondary));
     ImGui::Dummy(ImVec2(0, 8));
     ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::TextSecondary));
-    ImGui::TextWrapped("A 3D modeller that does what you'd expect: pick a tool, click and drag. Model, sculpt, paint, render and get it ready "
-                       "to print, and write a script when clicking gets repetitive.");
+    ImGui::TextWrapped("%s", project::description);
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, 4));
 
@@ -762,7 +762,7 @@ auto App::aboutWindow() -> void {
     const keel::GpuInfo gpu = r_->gpuInfo();
     const auto& machine = keel::sys::machine();
     const std::vector<std::pair<const char*, std::string>> rows = {
-        {"Version", FRY_VERSION}, {"Drawn with", r_->apiName()}, {"Graphics", gpu.name.empty() ? "?" : gpu.name}, {"System", machine.os}, {"Processor", machine.cpu},
+        {"Version", project::version}, {"Drawn with", r_->apiName()}, {"Graphics", gpu.name.empty() ? "?" : gpu.name}, {"System", machine.os}, {"Processor", machine.cpu},
         {"Plug-ins", std::format("{} loaded", std::count_if(plugins_.begin(), plugins_.end(), [](const PluginEntry& e) { return e.p && e.error.empty(); }))}};
     ImGui::BeginChild("details", ImVec2(0, 0), ImGuiChildFlags_FrameStyle | ImGuiChildFlags_AutoResizeY);
     if (ImGui::BeginTable("details", 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -781,21 +781,39 @@ auto App::aboutWindow() -> void {
     ImGui::Dummy(ImVec2(0, 4));
     const float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3;
     pushAccent();
-    if (ImGui::Button("Website", ImVec2(bw, 0))) SDL_OpenURL("https://nexoniarz.github.io/Fry3DX/");
+    if (ImGui::Button("Website", ImVec2(bw, 0))) SDL_OpenURL(project::website);
     popAccent();
     ImGui::SameLine();
-    if (ImGui::Button("Source on GitHub", ImVec2(bw, 0))) SDL_OpenURL("https://github.com/Nexoniarz/Fry3DX");
+    if (ImGui::Button("Source on GitHub", ImVec2(bw, 0))) SDL_OpenURL(project::repo);
     ImGui::SameLine();
     if (ImGui::Button("Copy details", ImVec2(bw, 0))) {
-        std::string text = "Fry3DX";
+        std::string text = project::name;
         for (const auto& [k, v] : rows) text += std::format("\n{}: {}", k, v);
         SDL_SetClipboardText(text.c_str());
         say("The details are copied: paste them into a bug report");
     }
+    // Who made it (project.json's creators: a name with a link opens it).
     ImGui::Dummy(ImVec2(0, 6));
+    ImGui::TextColored(roleColor(Role::TextTertiary), "Made by");
+    for (const project::Creator& c : project::creators) {
+        ImGui::PushID(c.name);
+        if (*c.url) {
+            ImGui::PushStyleColor(ImGuiCol_Text, accentText());
+            if (ImGui::Selectable(c.name, false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(c.name).x, 0))) SDL_OpenURL(c.url);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", c.url);
+        } else {
+            ImGui::TextUnformatted(c.name);
+        }
+        if (*c.role) {
+            ImGui::SameLine();
+            ImGui::TextColored(roleColor(Role::TextSecondary), "  %s", c.role);
+        }
+        ImGui::PopID();
+    }
+    ImGui::Dummy(ImVec2(0, 4));
     ImGui::PushStyleColor(ImGuiCol_Text, roleColor(Role::TextTertiary));
-    ImGui::TextWrapped("Made by Nexoniarz, open source (Apache License 2.0). Built on SDL 3, Dear ImGui, Lua 5.4, GLM, zstd, stb, volk and VMA; "
-                       "the look is Niveus.");
+    ImGui::TextWrapped("Open source (%s). Built on %s; the look is %s.", project::license, project::builtWith, project::look);
     ImGui::PopStyleColor();
     ImGui::End();
 }

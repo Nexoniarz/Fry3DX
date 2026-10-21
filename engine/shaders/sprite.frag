@@ -11,20 +11,22 @@ PUSH_BLOCK {
 layout(location = 0) in vec2 v_uv;
 layout(location = 1) in vec3 v_world;
 // A grid (a sprite with colour.a < 0), worked out for each pixel where it lies on its plane:
-// four sets of lines each `first` × 10 apart, each set showing by how far apart its lines are on
-// the screen (none where they crowd together, stronger where they're far apart), lines about a
-// pixel wide, smooth; the axes through the middle in the colour of the world's axis they run along.
+// lines every 10^n metres (`metre`: units in one), the four sets from the finest that isn't
+// crowded together here, each showing by how far apart its lines are on the screen (none where
+// they crowd, stronger where they're far apart: nothing jumps as the view moves), about a pixel
+// wide, smooth; the axes through the middle in the colour of the world's axis they run along.
 // look: x the lines' shade (0 dark, 1 light), y how faint, z how strong; reach: it fades out there.
 vec3 gridAxisColor(vec3 d) {
     d = abs(d);
     return d.x > 0.5 ? vec3(0.9, 0.25, 0.25) : d.y > 0.5 ? vec3(0.3, 0.75, 0.25) : vec3(0.25, 0.45, 0.95);
 }
-vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float first, vec3 look, float reach) {
+vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float metre, vec3 look, float reach) {
     vec2 c = vec2(dot(w, u), dot(w, v));
     vec2 fw = max(fwidth(c), vec2(1e-9));
+    float finest = floor(log(min(fw.x, fw.y) * 5.0 / metre) / log(10.0)); // (10^this m: 5 pixels apart or more)
     float lines = 0.0;
     for (int k = 0; k < 4; ++k) {
-        float s = first * pow(10.0, float(k));
+        float s = metre * pow(10.0, finest + float(k));
         vec2 apart = s / fw; // (pixels between this set's lines, each way)
         vec2 off = abs(fract(c / s + 0.5) - 0.5) * apart; // (pixels to the nearest of them)
         vec2 strong = smoothstep(20.0, 160.0, apart);
@@ -43,7 +45,7 @@ vec4 gridColor(vec3 w, vec3 centre, vec3 u, vec3 v, float first, vec3 look, floa
 
 layout(location = 0) out vec4 o_color;
 void main() {
-    if (pc.color.a < 0.0) { // a grid: right.w its finest step, color.rgb its look, posSize.w how far it reaches
+    if (pc.color.a < 0.0) { // a grid: right.w the units in a metre, color.rgb its look, posSize.w how far it reaches
         o_color = gridColor(v_world, pc.posSize.xyz, normalize(pc.right.xyz), normalize(pc.up.xyz), pc.right.w, pc.color.rgb, pc.posSize.w);
         return;
     }

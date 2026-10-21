@@ -1,0 +1,20 @@
+{
+  "_": "Fry3DX's details, in one place: the build reads them (the version, the About box, the Help menu, Windows' file details). Change them here; CMake picks them up on the next build.",
+  "name": "Fry3DX",
+  "long": "Frying 3D Extreme",
+  "version": "0.8.1",
+  "tagline": "A 3D modeller that does what you'd expect.",
+  "description": "A 3D modeller that does what you'd expect: pick a tool, click and drag. Model, sculpt, paint, render and get it ready to print, and write a script when clicking gets repetitive.",
+  "website": "https://nexoniarz.github.io/Fry3DX/",
+  "repo": "https://github.com/Nexoniarz/Fry3DX",
+  "issues": "https://github.com/Nexoniarz/Fry3DX/issues",
+  "releases": "https://github.com/Nexoniarz/Fry3DX/releases/latest",
+  "license": "Apache License 2.0",
+  "copyright": "Copyright 2026 Nexoniarz",
+  "company": "Nexoniarz",
+  "look": "Niveus",
+  "creators": [
+    { "name": "Nexoniarz", "role": "Made it: the idea, the design, the code, the look", "url": "https://github.com/Nexoniarz" }
+  ],
+  "builtWith": ["SDL 3", "Dear ImGui", "Lua 5.4", "GLM", "Manifold", "zstd", "stb", "volk", "VMA"]
+}

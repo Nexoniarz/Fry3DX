@@ -211,10 +211,10 @@ void Renderer::drawSprite(const glm::vec3& at, float size, const glm::vec4& colo
     list.push_back({glm::vec4(at, size * 0.5f), color, glm::vec4(0, 0, 0, rotation), glm::vec4(0, 0, 0, tex)});
 }
 
-void Renderer::drawGrid(const glm::vec3& centre, const glm::vec3& u, const glm::vec3& v, float first, const glm::vec3& look, float reach) {
+void Renderer::drawGrid(const glm::vec3& centre, const glm::vec3& u, const glm::vec3& v, float metre, const glm::vec3& look, float reach) {
     if (packet_.sprites.size() >= 8192) return;
     // (colour.a < 0 marks it; sprite.vert / sprite.frag)
-    packet_.sprites.push_back({glm::vec4(centre, reach), glm::vec4(look, -1.0f), glm::vec4(u, first), glm::vec4(v, 0.0f)});
+    packet_.sprites.push_back({glm::vec4(centre, reach), glm::vec4(look, -1.0f), glm::vec4(u, metre), glm::vec4(v, 0.0f)});
 }
 
 void Renderer::drawStreak(const glm::vec3& from, const glm::vec3& to, float width, const glm::vec4& color, TextureId texture, bool additive, float widthTo) {

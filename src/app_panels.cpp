@@ -1,5 +1,6 @@
 // Fry3DX: the panels: layers, properties, menus, the commands and their keys.
 #include "app.h"
+#include "fry_project.h"
 
 using namespace fry;
 namespace stdfs = std::filesystem;
@@ -788,7 +789,12 @@ auto App::menus() -> void {
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("Keys and mouse", "F1")) showHelp_ = true;
         commandItem("help.search");
-        if (ImGui::MenuItem("About Fry3DX")) showAbout_ = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Website")) SDL_OpenURL(project::website);
+        if (ImGui::MenuItem("Report a problem")) SDL_OpenURL(project::issues);
+        if (ImGui::MenuItem("Newest version")) SDL_OpenURL(project::releases);
+        ImGui::Separator();
+        if (ImGui::MenuItem(std::format("About {}", project::name).c_str())) showAbout_ = true;
         ImGui::EndMenu();
     }
 }

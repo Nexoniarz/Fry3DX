@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
-project(Fry3DX VERSION 0.8.0 LANGUAGES C CXX)
+include(cmake/Project.cmake) # project.json: the version, links, creators
+project(Fry3DX VERSION ${FRY_VERSION} LANGUAGES C CXX)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF) # (no C++ modules; the scan can pick up a different clang than the NDK's)
 if(UNIX AND NOT APPLE)
   add_link_options(-rdynamic) # function names in crash reports
