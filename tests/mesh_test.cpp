@@ -709,6 +709,25 @@ int main() {
         CHECK(!held.empty() && std::abs(boundsMax(g).z - 0.8f) < 0.01f && closed(g), "grab pulls the middle up with it (%.3f)", boundsMax(g).z);
     }
 
+    { // combining where faces lie on each other (the BSP's weak spot): touching, flush, the same
+        Mesh a = makeCube(1.0f), b = makeCube(1.0f);
+        transform(b, glm::translate(glm::mat4(1.0f), glm::vec3(1, 0, 0)));
+        bool ok = combine(a, b, Combine::Add);
+        CHECK(ok && checkForPrint(a).closed() && std::abs(checkForPrint(a).volume - 2.0f) < 1e-4f && a.faces.size() == 6, "two cubes side by side: one 2 m3 block, 6 faces (%zu)", a.faces.size());
+        Mesh c = makeCube(1.0f), d = makeCube(0.5f);
+        transform(d, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0.25f))); // (its top flush with the cube's)
+        ok = combine(c, d, Combine::Subtract);
+        CHECK(ok && checkForPrint(c).closed() && std::abs(checkForPrint(c).volume - 0.875f) < 1e-4f, "a pocket flush with the top: 0.875 m3, closed (%.4f)", checkForPrint(c).volume);
+        Mesh e = makeCube(1.0f);
+        CHECK(!combine(e, makeCube(1.0f), Combine::Subtract), "a cube take itself: nothing left");
+        Mesh s1 = makeSphere(32, 16, 0.5f), s2 = makeSphere(32, 16, 0.5f);
+        transform(s2, glm::translate(glm::mat4(1.0f), glm::vec3(0.3f, 0.1f, 0.05f)));
+        const auto t0 = std::chrono::steady_clock::now();
+        ok = combine(s1, s2, Combine::Subtract);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        CHECK(ok && checkForPrint(s1).closed(), "a sphere bitten by another: closed (%zu faces, %.0f ms)", s1.faces.size(), ms);
+    }
+
     { // editable cuts: a box with a bar through it, the bar still an object
         Scene sc;
         Object box, bar;

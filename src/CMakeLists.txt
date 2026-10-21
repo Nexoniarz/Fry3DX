@@ -1,8 +1,22 @@
 # Fry3DX: the app (app.cpp) on the engine, and its modelling core (mesh, scene) as a library the
 # tests use too.
+# Manifold (github.com/elalish/manifold): exact, robust combining of closed shapes. Just the
+# library: no threads (TBB), no 2D, no bindings.
+include(FetchContent)
+set(MANIFOLD_PAR OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CROSS_SECTION OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_JSBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_EXPORT OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(manifold GIT_REPOSITORY https://github.com/elalish/manifold.git
+                     GIT_TAG v3.0.1 GIT_SHALLOW ON SYSTEM)
+FetchContent_MakeAvailable(manifold)
+
 add_library(fry_core STATIC mesh.cpp bvh.cpp text.cpp import.cpp tools.cpp cut.cpp uv.cpp image.cpp sticker.cpp shapes.cpp scene.cpp package.cpp export.cpp print.cpp boolean.cpp modify.cpp sculpt.cpp)
 target_include_directories(fry_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(fry_core PUBLIC glm::glm libzstd_static PRIVATE stb cgltf)
+target_link_libraries(fry_core PUBLIC glm::glm libzstd_static PRIVATE stb cgltf manifold)
 target_compile_definitions(fry_core PUBLIC GLM_ENABLE_EXPERIMENTAL)
 # Scripts (Lua) that build and change the scene: also without a window, for the tests.
 add_library(fry_script STATIC script.cpp)

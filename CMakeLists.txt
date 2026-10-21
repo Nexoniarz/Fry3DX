@@ -38,6 +38,9 @@ else()
   set(FRY_CONTENT_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 endif()
 
+# Libraries are linked in, not .so files beside the program (SDL says for itself). Set before
+# any of them, so one that has its own BUILD_SHARED_LIBS option (Manifold) can't turn it on.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build the libraries as shared ones" FORCE)
 include(cmake/Dependencies.cmake)
 include(cmake/Shaders.cmake)
 

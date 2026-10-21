@@ -3,10 +3,14 @@
 // shared, points that land on another piece's edge set into it (so it stays closed all round).
 #include "mesh.h"
 
+#include <manifold/manifold.h>
+
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace fry {
@@ -330,9 +334,109 @@ Mesh combineOnce(const Mesh& am, const Mesh& b, Combine op) {
     return a;
 }
 
+
+// Manifold's way, for two closed shapes: exact, and doesn't go wrong where faces just touch.
+// Each triangle carries the face it came from, so its faces come back whole (not triangles).
+// Nothing if either isn't closed all round the way it needs (then the BSP's way).
+std::optional<Mesh> combineManifold(const Mesh& a, const Mesh& b, Combine op) {
+    auto toManifold = [](const Mesh& m, uint32_t firstFace) -> std::optional<manifold::Manifold> {
+        manifold::MeshGL g;
+        g.numProp = 3;
+        g.vertProperties.reserve(m.verts.size() * 3);
+        for (const glm::vec3& v : m.verts) g.vertProperties.insert(g.vertProperties.end(), {v.x, v.y, v.z});
+        for (size_t f = 0; f < m.faces.size(); ++f) {
+            if (m.faces[f].size() < 3) return std::nullopt; // (a line: not a solid)
+            for (const auto& t : triangulate(m, int(f)))
+                g.triVerts.insert(g.triVerts.end(), {uint32_t(t[0]), uint32_t(t[1]), uint32_t(t[2])}), g.faceID.push_back(firstFace + uint32_t(f));
+        }
+        if (g.triVerts.empty()) return std::nullopt;
+        g.runOriginalID = {manifold::Manifold::ReserveIDs(1)}; // (so it keeps the faces given, not its own numbering)
+        g.runIndex = {0, uint32_t(g.triVerts.size())};
+        g.Merge(); // (points in the same place, kept apart by a seam: one)
+        manifold::Manifold out(g);
+        if (out.Status() != manifold::Manifold::Error::NoError) return std::nullopt;
+        return out;
+    };
+    const auto A = toManifold(a, 0), B = toManifold(b, uint32_t(a.faces.size()));
+    if (!A || !B) return std::nullopt;
+    const manifold::Manifold r = op == Combine::Add ? *A + *B : op == Combine::Subtract ? *A - *B : *A ^ *B;
+    if (r.Status() != manifold::Manifold::Error::NoError) return std::nullopt;
+    const manifold::MeshGL g = r.GetMeshGL();
+    Mesh out;
+    const size_t n = g.NumVert();
+    out.verts.reserve(n);
+    for (size_t i = 0; i < n; ++i) out.verts.push_back({g.vertProperties[i * g.numProp], g.vertProperties[i * g.numProp + 1], g.vertProperties[i * g.numProp + 2]});
+    // The triangles of each face, joined back into it: its outline, walked round (a face cut into
+    // two pieces, or with a hole in it: as it comes, triangles).
+    // A face of one shape lying flat against a face of the other, side by side (both cubes' tops
+    // in a row): one face. A shape's own faces stay as they were.
+    const size_t tris = g.triVerts.size() / 3;
+    const uint32_t split = uint32_t(a.faces.size());
+    std::vector<uint32_t> id(tris);
+    for (size_t t = 0; t < tris; ++t) id[t] = t < g.faceID.size() ? g.faceID[t] : uint32_t(0x80000000u + t);
+    std::map<uint32_t, uint32_t> parent;
+    std::function<uint32_t(uint32_t)> root = [&](uint32_t x) {
+        auto it = parent.find(x);
+        if (it == parent.end() || it->second == x) return x;
+        return it->second = root(it->second);
+    };
+    std::map<uint32_t, glm::vec4> plane; // (each face's: its normal and how far along it)
+    for (size_t t = 0; t < tris; ++t) {
+        if (plane.count(id[t])) continue;
+        const glm::vec3 p0 = out.verts[g.triVerts[t * 3]], p1 = out.verts[g.triVerts[t * 3 + 1]], p2 = out.verts[g.triVerts[t * 3 + 2]];
+        const glm::vec3 c = glm::cross(p1 - p0, p2 - p0);
+        if (glm::length(c) > 1e-12f) plane[id[t]] = glm::vec4(glm::normalize(c), glm::dot(glm::normalize(c), p0));
+    }
+    float size = 0;
+    for (const glm::vec3& v : out.verts) size = std::max(size, std::max(std::abs(v.x), std::max(std::abs(v.y), std::abs(v.z))));
+    std::map<std::pair<int, int>, size_t> edgeTri;
+    for (size_t t = 0; t < tris; ++t)
+        for (int k = 0; k < 3; ++k) edgeTri[{int(g.triVerts[t * 3 + size_t(k)]), int(g.triVerts[t * 3 + size_t((k + 1) % 3)])}] = t;
+    for (const auto& [e, t] : edgeTri) {
+        auto o = edgeTri.find({e.second, e.first});
+        if (o == edgeTri.end()) continue;
+        const uint32_t x = id[t], y = id[o->second];
+        if (x == y || (x < split) == (y < split) || !plane.count(x) || !plane.count(y)) continue;
+        const glm::vec4 px = plane[x], py = plane[y];
+        if (glm::dot(glm::vec3(px), glm::vec3(py)) > 1 - 1e-5f && std::abs(px.w - py.w) < 1e-5f * std::max(size, 1.0f)) {
+            const uint32_t rx = root(x), ry = root(y);
+            if (rx != ry) parent[rx] = ry, parent.emplace(ry, ry);
+        }
+    }
+    std::map<uint32_t, std::vector<std::array<int, 3>>> faces;
+    for (size_t t = 0; t < tris; ++t) faces[root(id[t])].push_back({int(g.triVerts[t * 3]), int(g.triVerts[t * 3 + 1]), int(g.triVerts[t * 3 + 2])});
+    for (const auto& [id, ts] : faces) {
+        std::set<std::pair<int, int>> inside;
+        for (const auto& t : ts)
+            for (int k = 0; k < 3; ++k) inside.insert({t[size_t(k)], t[size_t((k + 1) % 3)]});
+        std::map<int, int> next;
+        bool simple = true;
+        for (const auto& [p, q] : inside)
+            if (!inside.count({q, p})) simple &= next.emplace(p, q).second; // (an outline edge)
+        std::vector<int> loop;
+        if (simple && !next.empty()) {
+            int at = next.begin()->first;
+            do {
+                loop.push_back(at);
+                auto it = next.find(at);
+                if (it == next.end() || loop.size() > next.size()) break;
+                at = it->second;
+            } while (at != loop.front());
+        }
+        if (simple && loop.size() == next.size() && loop.size() >= 3) out.faces.push_back(loop);
+        else
+            for (const auto& t : ts) out.faces.push_back({t[0], t[1], t[2]});
+    }
+    return out;
+}
+
 } // namespace
 
 bool combine(Mesh& a, const Mesh& b, Combine op) {
+    if (auto m = combineManifold(a, b, op)) {
+        a = std::move(*m);
+        return !a.faces.empty();
+    }
     Mesh out = combineOnce(a, b, op);
     // Closed going in but not coming out: the rounding went wrong somewhere. Again with the
     // other shape moved a few µm (nothing that shows), and the first that comes out closed kept.
