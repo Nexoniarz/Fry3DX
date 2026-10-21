@@ -684,6 +684,7 @@ public:
         else if (!knifePts_.empty()) knifePts_.clear();
         else if (!drawPts_.empty()) drawPts_.clear();
         else if (drag_.active) cancelDrag();
+        else if (slide_.active) cancelSlide();
         else if (mode_ == Mode::Edit) leaveEdit();
         else selected_.clear();
     }
@@ -815,6 +816,7 @@ private:
         Scene before;
         std::set<std::pair<int, int>> bevelEdges;
         std::vector<std::pair<int, float>> soft; // points near the selection that follow it, and how much
+        std::string typed; // (a number typed while dragging: exactly that much)
     } drag_;
     // Soft selection (shape editing): points within `softReach_` of the selection follow it, less
     // the further they are (Blender's proportional editing, Maya's soft select).
@@ -4746,7 +4748,20 @@ private:
     }
 
     void updateDrag(const ImGuiIO& io) {
+        for (ImWchar c : io.InputQueueCharacters) {
+            if ((c >= '0' && c <= '9') || (c == '.' && drag_.typed.find('.') == std::string::npos)) drag_.typed += char(c);
+            else if (c == '-') drag_.typed = drag_.typed.starts_with('-') ? drag_.typed.substr(1) : "-" + drag_.typed;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !drag_.typed.empty()) drag_.typed.pop_back();
         dragNow(io);
+        // (the number by the mouse, as it goes: what you'd read in the status line, where you look)
+        if (!message_.empty()) {
+            const std::string label = drag_.typed.empty() ? message_ : message_ + "   (typed)";
+            const ImVec2 at(io.MousePos.x + 18, io.MousePos.y + 14), size = ImGui::CalcTextSize(label.c_str());
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            dl->AddRectFilled(ImVec2(at.x - 6, at.y - 3), ImVec2(at.x + size.x + 6, at.y + size.y + 3), IM_COL32(24, 24, 28, 225), 4.0f);
+            dl->AddText(at, drag_.typed.empty() ? IM_COL32(235, 235, 240, 255) : kAccent, label.c_str());
+        }
         if (liveMirror_ && mode_ == Mode::Edit)
             if (Object* o = editing())
                 for (const Object& b : drag_.before.objects)
@@ -4778,6 +4793,11 @@ private:
             o.mesh.verts[size_t(it->second)] = glm::vec3(-n.x, n.y, n.z);
         }
     }
+    // The number typed while dragging, if any (just "-" or "." is none yet).
+    std::optional<float> typed() const {
+        if (drag_.typed.empty() || drag_.typed == "-" || drag_.typed == "." || drag_.typed == "-.") return std::nullopt;
+        return std::strtof(drag_.typed.c_str(), nullptr);
+    }
     void dragNow(const ImGuiIO& io) {
         const Ray ray = mouseRay(io.MousePos);
         const bool snapping = snap_ != io.KeyCtrl; // Ctrl flips snapping while held
@@ -4792,6 +4812,7 @@ private:
             float d = closestOnAxis(ray, p, n) - drag_.startT;
             if (drag_.tool == Tool::Extrude) {
                 if (snapping) d = snapTo(d, snapMove_);
+                if (auto v = typed()) d = *v;
                 // (the pull in the object's own size, so it follows the mouse whatever its scale)
                 const float scale = std::cbrt(std::abs(glm::determinant(glm::mat3(objectMatrix(*o)))));
                 extrudeFaces(o->mesh, selFaces_, d / std::max(scale, 1e-6f));
@@ -4800,6 +4821,7 @@ private:
             } else {
                 float t = std::clamp(-d / (pixelSize(p) * 120.0f), 0.0f, 0.99f);
                 if (snapping) t = snapTo(t, 0.05f);
+                if (auto v = typed()) t = std::clamp(*v / 100.0f, 0.0f, 0.99f);
                 insetFaces(o->mesh, selFaces_, t);
                 insetAmount_ = t;
                 message_ = std::format("Inset {:.0f}%", t * 100), messageAt_ = now();
@@ -4812,6 +4834,7 @@ private:
             if (!o) return;
             float w = std::max(0.0f, io.MousePos.x - drag_.startMouse.x) * pixelSize(p) * 0.5f;
             if (snapping) w = snapTo(w, 0.005f);
+            if (auto v = typed()) w = std::max(0.0f, *v);
             if (w > 0) bevelEdges(o->mesh, drag_.bevelEdges, w, bevelSteps_);
             bevelWidth_ = w;
             handMade(*o);
@@ -4826,6 +4849,7 @@ private:
             if (drag_.handle < 3) {
                 float t = closestOnAxis(ray, p, axes[size_t(drag_.handle)]) - drag_.startT;
                 if (snapping) t = snapTo(t, snapMove_);
+                if (auto v = typed()) t = *v;
                 delta = axes[size_t(drag_.handle)] * t;
             } else if (auto hit = hitPlane(ray, p, -viewDir())) {
                 delta = *hit - drag_.startHit;
@@ -4841,6 +4865,7 @@ private:
             const glm::vec3 axis = drag_.handle < 3 ? axes[size_t(drag_.handle)] : -viewDir();
             if (glm::dot(axis, viewDir()) < 0) deg = -deg; // (turning the way the mouse goes round, as seen)
             if (snapping) deg = snapTo(deg, snapAngle_);
+            if (auto v = typed()) deg = *v;
             T = glm::translate(glm::mat4(1.0f), p) * glm::rotate(glm::mat4(1.0f), glm::radians(deg), axis) * glm::translate(glm::mat4(1.0f), -p);
             message_ = std::format("Rotate {:.1f} degrees", deg), messageAt_ = now();
         } else if (drag_.tool == Tool::Scale) {
@@ -4852,6 +4877,7 @@ private:
                 const float from = both ? drag_.startMid : drag_.startDist;
                 float dist = from + closestOnAxis(ray, drag_.handlePoint, axes[size_t(k)]);
                 if (snapping) dist = both ? snapTo(dist * 2, snapMove_) / 2 : snapTo(dist, snapMove_);
+                if (auto v = typed()) dist = (from < 0 ? -1.0f : 1.0f) * std::abs(*v) / (both ? 2.0f : 1.0f); // (the size it's to be, m)
                 const float f = std::abs(from) > 1e-6f ? dist / from : 1.0f;
                 s[k] = f;
                 message_ = std::format("Scale {:.2f}  ({:.3f} m){}", f, std::abs(dist) * (both ? 2 : 1), both ? "  from both sides" : "   (Shift: from both sides)"),
@@ -4859,6 +4885,7 @@ private:
             } else {
                 even = std::max(0.01f, 1.0f + ((io.MousePos.x - drag_.startMouse.x) - (io.MousePos.y - drag_.startMouse.y)) / 200.0f);
                 if (snapping) even = std::max(snapScale_, snapTo(even, snapScale_));
+                if (auto v = typed()) even = std::max(0.001f, *v);
                 s = glm::vec3(even);
                 message_ = std::format("Scale {:.2f} (drag right or up to grow)", even), messageAt_ = now();
             }
@@ -5171,7 +5198,7 @@ private:
     // ───────────────────────────── keys ─────────────────────────────
 
     void shortcuts(ImGuiIO& io) {
-        if (io.WantTextInput || slide_.active) return; // (a slide has its own keys)
+        if (io.WantTextInput || slide_.active || drag_.active) return; // (a slide, a drag: their own keys)
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
         auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
         if (key(ImGuiKey_F3) || (ctrl && key(ImGuiKey_Space))) return openSearch();
@@ -7929,17 +7956,20 @@ private:
         slide_.active = true, slide_.object = o->id, slide_.from = o->mesh, slide_.start = ImGui::GetIO().MousePos;
         say("Sliding: move the mouse along the edges, click to keep it (Esc: as it was)");
     }
+    void cancelSlide() {
+        if (!slide_.active) return;
+        slide_.active = false;
+        if (Object* o = find(slide_.object)) o->mesh = slide_.from, touched(o->id);
+        takeBack();
+        say("Slide put back");
+    }
     void slideFrame(const ImGuiIO& io) {
         Object* o = find(slide_.object);
         if (!o || mode_ != Mode::Edit) {
             if (o) o->mesh = slide_.from, touched(o->id);
             return void(slide_.active = false);
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-            o->mesh = slide_.from, touched(o->id), slide_.active = false;
-            takeBack();
-            return say("Slide put back");
-        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) return cancelSlide(); // (Esc: onEscape)
         const glm::mat4 m = objectMatrix(*o);
         const ImVec2 d(io.MousePos.x - slide_.start.x, io.MousePos.y - slide_.start.y);
         const float dl = std::hypot(d.x, d.y);
