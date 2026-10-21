@@ -379,7 +379,8 @@ int runClient(Game& game) {
         }
         const bool focused = SDL_GetWindowFlags(window.handle()) & SDL_WINDOW_INPUT_FOCUS;
         audio::setFocused(focused);
-        if (vid_mode.consumeModified() | vid_width.consumeModified() | vid_height.consumeModified())
+        const bool mode = vid_mode.consumeModified(), width = vid_width.consumeModified(), height = vid_height.consumeModified(); // (each taken, none skipped)
+        if (mode || width || height)
             window.setMode(vid_mode.i(), std::max(vid_width.i(), 640), std::max(vid_height.i(), 480));
         // Menus need no more than fps_max_menu (like Source's): high frame rates there only heat
         // the GPU and make coil whine (often heard in headphones on the onboard jack).

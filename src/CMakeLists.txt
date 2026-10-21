@@ -22,12 +22,14 @@ target_compile_definitions(fry_core PUBLIC GLM_ENABLE_EXPERIMENTAL)
 add_library(fry_script STATIC script.cpp)
 target_link_libraries(fry_script PUBLIC fry_core PRIVATE lua)
 
+# The app: its class declared in app.h, what it does in app*.cpp by part.
+set(FRY_APP_SOURCES app.cpp app_model.cpp app_paint.cpp app_panels.cpp app_print.cpp app_scripts.cpp app_view.cpp commands.cpp icons.cpp)
 if(ANDROID) # SDL's Java side loads the app as libmain.so and calls its (SDL_)main
-  add_library(fry3dx SHARED app.cpp commands.cpp icons.cpp)
+  add_library(fry3dx SHARED ${FRY_APP_SOURCES})
   set_target_properties(fry3dx PROPERTIES OUTPUT_NAME main LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 elseif(APPLE) # a Mac app: Fry3DX.app, content in Contents/Resources, MoltenVK in Contents/Frameworks
   set(icns ${PROJECT_SOURCE_DIR}/branding/fry3dx.icns)
-  add_executable(fry3dx MACOSX_BUNDLE app.cpp commands.cpp icons.cpp ${icns})
+  add_executable(fry3dx MACOSX_BUNDLE ${FRY_APP_SOURCES} ${icns})
   set_source_files_properties(${icns} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
   set_target_properties(fry3dx PROPERTIES OUTPUT_NAME Fry3DX MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/cmake/Info.plist.in)
   # Vulkan on a Mac is MoltenVK (Vulkan on Metal): FRY_MOLTENVK=/path/to/libMoltenVK.dylib, or
@@ -42,7 +44,7 @@ elseif(APPLE) # a Mac app: Fry3DX.app, content in Contents/Resources, MoltenVK i
     message(WARNING "No MoltenVK found (set FRY_MOLTENVK): Fry3DX.app will only have OpenGL 4.1")
   endif()
 else()
-  add_executable(fry3dx app.cpp commands.cpp icons.cpp)
+  add_executable(fry3dx ${FRY_APP_SOURCES})
 endif()
 if(WIN32) # a window program (no console window), with its icon
   target_sources(fry3dx PRIVATE fry3dx.rc)
