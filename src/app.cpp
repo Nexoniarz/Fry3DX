@@ -1255,6 +1255,21 @@ auto App::shrinkSelection() -> void {
 // Like the picked: faces that face the same way, edges as long, points with as many edges.
 auto App::selectSimilar() -> void {
     Object* o = editing();
+    if (!o && mode_ == Mode::Object) { // whole objects: the others of the same shape (copies of one part: every bolt)
+        std::vector<const Object*> like;
+        for (const Object& p : scene_.objects)
+            if (selected_.count(p.id)) like.push_back(&p);
+        if (like.empty()) return say("Pick an object first");
+        auto same = [](const Object& a, const Object& b) {
+            if (!a.recipe.empty() || !b.recipe.empty()) return a.recipe == b.recipe && a.settings == b.settings;
+            return a.mesh.verts.size() == b.mesh.verts.size() && a.mesh.faces.size() == b.mesh.faces.size();
+        };
+        const size_t before = selected_.size();
+        for (const Object& p : scene_.objects)
+            if (p.visible && !p.locked && std::any_of(like.begin(), like.end(), [&](const Object* l) { return same(*l, p); })) selected_.insert(p.id);
+        const size_t more = selected_.size() - before;
+        return say(more ? std::format("{} more of the same shape picked", more) : "No others of the same shape");
+    }
     if (!o) return;
     const Mesh& m = o->mesh;
     if (elem_ == Elem::Face) {
@@ -1668,6 +1683,7 @@ auto App::shortcuts(ImGuiIO& io) -> void {
     if (key(ImGuiKey_Q)) setTool(Tool::Select);
     if (key(ImGuiKey_W)) setTool(Tool::Move);
     if (key(ImGuiKey_E) && shift && mode_ == Mode::Edit) return creaseSelected();
+    if (key(ImGuiKey_G) && shift) return selectSimilar();
     if (key(ImGuiKey_E)) setTool(Tool::Rotate);
     if (key(ImGuiKey_R)) setTool(Tool::Scale);
     if (key(ImGuiKey_D)) setTool(Tool::Draw);

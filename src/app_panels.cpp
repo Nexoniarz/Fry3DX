@@ -441,7 +441,7 @@ auto App::buildCommands() -> void {
     add("select.grow", "Select more (grow)", "Select", "Ctrl +", [this] { growSelection(); }, editing);
     add("select.shrink", "Select less (shrink)", "Select", "Ctrl -", [this] { shrinkSelection(); }, editing);
     add("select.linked", "Select everything joined to it", "Select", "L", [this] { selectLinked(); }, editing, "linked connected");
-    add("select.similar", "Select similar faces (facing the same way)", "Select", "Shift+G", [this] { selectSimilar(); }, editing, "same normal size");
+    add("select.similar", "Select similar (faces the same way; objects of the same shape)", "Select", "Shift+G", [this] { selectSimilar(); }, [=] { return editing() || picked(); }, "same normal size copies");
     add("select.loop", "Select whole loops (of the picked edges)", "Select", "", [this] { loopsOfSelected(false); }, editing, "edge loop");
     add("select.ring", "Select rings (across the picked edges)", "Select", "", [this] { loopsOfSelected(true); }, editing, "edge ring");
     for (const auto& [t, n] : std::initializer_list<std::pair<SelShape, const char*>>{{SelShape::Box, "box"}, {SelShape::Brush, "brush"}, {SelShape::Lasso, "lasso"}})
