@@ -591,6 +591,10 @@ public:
             self->spinRise_ = a.size() > 3 ? std::stof(a[3]) / 1000 : 0.0f, self->spinWorld_ = a.size() > 4 && a[4] == "world";
             self->spinSelected();
         }, "Fry3DX: spin the picked shape round Z: degrees steps [rise mm] [world]");
+        static keel::Cmd slideCmd("fry_slide", [](const keel::Args& a) { // (as though the mouse had gone dx, dy since)
+            self->startSlide();
+            if (a.size() > 2) self->slide_.start = ImVec2(ImGui::GetIO().MousePos.x - std::stof(a[1]), ImGui::GetIO().MousePos.y - std::stof(a[2]));
+        }, "Fry3DX: start sliding the picked points, as though the mouse had moved dx dy");
         static keel::Cmd about("fry_about", [](const keel::Args&) { self->showAbout_ = true; }, "Fry3DX: show the About window");
         static keel::Cmd plugins("fry_plugins", [](const keel::Args& a) {
             if (a.size() > 1 && a[1] == "reload") self->loadPlugins();
@@ -4942,6 +4946,7 @@ private:
 
     void viewport(ImGuiIO& io) {
         cutHover_ = {-1, -1};
+        if (slide_.active) return slideFrame(io);
         if (tab_ == Tab::Paint) return paintViewport(io);
         if (tab_ == Tab::Layout) return layoutViewport(io);
         if (tab_ == Tab::Print && printTool_ != PrintTool::None) return printViewport(io);
@@ -5131,7 +5136,7 @@ private:
     // ───────────────────────────── keys ─────────────────────────────
 
     void shortcuts(ImGuiIO& io) {
-        if (io.WantTextInput) return;
+        if (io.WantTextInput || slide_.active) return; // (a slide has its own keys)
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
         auto key = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, false); };
         if (key(ImGuiKey_F3) || (ctrl && key(ImGuiKey_Space))) return openSearch();
@@ -5222,6 +5227,7 @@ private:
         }
         if (alt) {
             if (key(ImGuiKey_S) && mode_ == Mode::Edit) startPush();
+            if (key(ImGuiKey_G) && mode_ == Mode::Edit) return startSlide();
             if (key(ImGuiKey_A)) selectNone();
             if (key(ImGuiKey_Z)) xray_ = !xray_;
             if (key(ImGuiKey_H))
@@ -5925,7 +5931,7 @@ private:
         add("shape.bridge", "Bridge two faces", "Shape", "", [this] { bridgeNow(); }, editing, "tunnel connect");
         add("shape.soft", "Soft selection on / off", "Shape", "Shift+O", [this] { softSel_ = !softSel_; }, {}, "proportional falloff");
         add("shape.separate", "Make into its own object", "Shape", "P", [this] { separateSelected(); }, editing, "separate split");
-        add("shape.slide", "Slide the points along their edges...", "Shape", "", [this] { startSlide(); }, editing, "edge slide vertex slide");
+        add("shape.slide", "Slide the points along their edges...", "Shape", "Alt+G", [this] { startSlide(); }, editing, "edge slide vertex slide");
         add("shape.mirror", "Mirror editing (both sides change together)", "Shape", "", [this] { liveMirror_ = !liveMirror_; }, {}, "symmetry symmetric x");
         add("view.solid", "Show: solid", "View", "Z", [this] { shading_ = Shading::Solid; });
         add("view.rendered", "Show: rendered (sky, sun, shadows)", "View", "Z", [this] { shading_ = Shading::Rendered; });
@@ -7860,7 +7866,76 @@ private:
         for (const std::string& d : did) text += (text.empty() ? "" : ", ") + d;
         say("Repaired: " + text + (still ? std::format(". {} still not closed (see the Print tab)", still) : ". Ready to print"));
     }
-    void startSlide() {}
+    // Slide (Alt+G): the picked points glide along their edges, each along the edge that goes
+    // most the way the mouse goes, never past its other end. Click: done. Esc / right click: as it was.
+    struct Slide {
+        bool active = false;
+        uint32_t object = 0;
+        Mesh from;
+        std::vector<int> pts;
+        std::vector<std::vector<int>> rails; // (each point's neighbours that aren't picked: where it can go)
+        ImVec2 start{0, 0};
+    } slide_;
+    void startSlide() {
+        Object* o = editing();
+        if (!o) return say("Slide works on a shape being edited (Tab)");
+        const std::set<int> pts = selectedPoints();
+        if (pts.empty()) return say("Pick points, edges or faces to slide first");
+        std::vector<std::set<int>> near(o->mesh.verts.size());
+        for (const auto& e : adjacencyOf(*o, o->mesh).edges)
+            if (pts.count(e[0]) != pts.count(e[1])) near[size_t(e[0])].insert(e[1]), near[size_t(e[1])].insert(e[0]);
+        slide_ = {};
+        for (int v : pts)
+            if (!near[size_t(v)].empty()) slide_.pts.push_back(v), slide_.rails.emplace_back(near[size_t(v)].begin(), near[size_t(v)].end());
+        if (slide_.pts.empty()) return say("Nothing for those to slide along (every edge of theirs is picked too)");
+        pushUndo();
+        slide_.active = true, slide_.object = o->id, slide_.from = o->mesh, slide_.start = ImGui::GetIO().MousePos;
+        say("Sliding: move the mouse along the edges, click to keep it (Esc: as it was)");
+    }
+    void slideFrame(const ImGuiIO& io) {
+        Object* o = find(slide_.object);
+        if (!o || mode_ != Mode::Edit) {
+            if (o) o->mesh = slide_.from, touched(o->id);
+            return void(slide_.active = false);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            o->mesh = slide_.from, touched(o->id), slide_.active = false;
+            takeBack();
+            return say("Slide put back");
+        }
+        const glm::mat4 m = objectMatrix(*o);
+        const ImVec2 d(io.MousePos.x - slide_.start.x, io.MousePos.y - slide_.start.y);
+        const float dl = std::hypot(d.x, d.y);
+        float shown = 0;
+        o->mesh.verts = slide_.from.verts;
+        if (dl > 1) {
+            for (size_t i = 0; i < slide_.pts.size(); ++i) {
+                const glm::vec3 p = slide_.from.verts[size_t(slide_.pts[i])];
+                ImVec2 sp;
+                if (!project(glm::vec3(m * glm::vec4(p, 1.0f)), sp)) continue;
+                // (the edge whose way on the screen is most the mouse's, and how far along it the mouse has gone)
+                float best = 0.2f, t = 0;
+                int to = -1;
+                for (int r : slide_.rails[i]) {
+                    ImVec2 sr;
+                    if (!project(glm::vec3(m * glm::vec4(slide_.from.verts[size_t(r)], 1.0f)), sr)) continue;
+                    const ImVec2 e(sr.x - sp.x, sr.y - sp.y);
+                    const float el = std::hypot(e.x, e.y);
+                    if (el < 1) continue;
+                    const float along = (e.x * d.x + e.y * d.y) / el; // (pixels the mouse went that way)
+                    if (const float k = along / dl; k > best) best = k, to = r, t = std::clamp(along / el, 0.0f, 0.98f);
+                }
+                if (to >= 0) o->mesh.verts[size_t(slide_.pts[i])] = glm::mix(p, slide_.from.verts[size_t(to)], t), shown = std::max(shown, t);
+            }
+        }
+        touched(o->id);
+        message_ = std::format("Sliding {:.0f}% of the way along (click: keep, Esc: as it was)", shown * 100), messageAt_ = now();
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            slide_.active = false;
+            changedShape(*o, true);
+            say(std::format("Slid {} point{}", slide_.pts.size(), slide_.pts.size() == 1 ? "" : "s"));
+        }
+    }
 
     std::string workspaceDir() const { return keel::prefPath() + "workspaces/"; }
     void resetLayout() {
